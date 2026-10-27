@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NFL Predictor Pro</title>
+  <meta name="description" content="Pronósticos estadísticos de la NFL: puntos proyectados, probabilidades y validación histórica.">
+  <link rel="stylesheet" href="/static/styles.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+</head>
+<body>
+<header class="top">
+  <div class="top-inner">
+    <div class="brand"><div class="logo">NFL</div><div>NFL PREDICTOR PRO<small>Pronósticos estadísticos · sin cuotas de apuestas</small></div></div>
+    <nav class="tabs" id="tabs">
+      <button data-view="dashboard" class="active">Pronósticos</button>
+      <button data-view="compare">Comparador</button>
+      <button data-view="simulator">Simulador</button>
+      <button data-view="history">Historial y precisión</button>
+      <button data-view="method">Metodología</button>
+    </nav>
+    <div class="updated" id="updated"></div>
+  </div>
+</header>
+
+<main>
+  <div class="alerts" id="global-alerts"></div>
+
+  <section class="view active" id="view-dashboard">
+    <div class="toolbar">
+      <h1 style="margin:0 8px 0 0">Pronósticos</h1>
+      <select id="season-select" aria-label="Temporada"></select>
+      <select id="week-select" aria-label="Semana"></select>
+      <button class="btn secondary" id="export-csv">Exportar CSV</button>
+      <button class="btn secondary" id="export-json">Exportar JSON</button>
+    </div>
+    <div id="week-summary" class="muted small" style="margin-bottom:10px"></div>
+    <div class="games" id="games"></div>
+  </section>
+
+  <section class="view" id="view-game"></section>
+
+  <section class="view" id="view-compare">
+    <div class="toolbar">
+      <h1 style="margin:0 8px 0 0">Comparador de equipos</h1>
+      <select id="cmp-a" aria-label="Equipo A"></select>
+      <span class="muted">vs</span>
+      <select id="cmp-b" aria-label="Equipo B"></select>
+      <select id="cmp-season" aria-label="Temporada"></select>
+      <button class="btn" id="cmp-go">Comparar</button>
+    </div>
+    <div id="compare-out"></div>
+  </section>
+
+  <section class="view" id="view-simulator">
+    <h1>Simulador</h1>
+    <div class="card">
+      <div class="form-grid">
+        <label>Equipo local<select id="sim-home"></select></label>
+        <label>Equipo visitante<select id="sim-away"></select></label>
+        <label>Sede<select id="sim-neutral"><option value="0">Estadio del local</option><option value="1">Sede neutral</option></select></label>
+        <label>Techo / estadio<select id="sim-roof"><option value="">Según calendario</option><option value="outdoors">Aire libre</option><option value="dome">Cerrado (domo)</option></select></label>
+        <label>Temperatura (°F)<input type="number" id="sim-temp" placeholder="sin cambio"></label>
+        <label>Viento (mph)<input type="number" id="sim-wind" placeholder="sin cambio"></label>
+        <label>Descanso local − visitante (días)<input type="number" id="sim-rest" placeholder="0" min="-7" max="7"></label>
+        <label style="flex-direction:row"><span><input type="checkbox" id="sim-prob"> Incluir bajas probables/dudosas</span></label>
+      </div>
+      <div class="toolbar" style="margin-top:12px">
+        <button class="btn secondary" id="sim-swap">Cambiar local ↔ visitante</button>
+        <button class="btn secondary" id="sim-load">Cargar jugadores</button>
+        <button class="btn" id="sim-run">Ejecutar pronóstico (10,000 simulaciones)</button>
+      </div>
+      <div class="grid g2" id="sim-players"></div>
+    </div>
+    <div id="sim-out" class="section"></div>
+  </section>
+
+  <section class="view" id="view-history">
+    <h1>Historial y precisión</h1>
+    <div id="history-out"><div class="loading">Cargando…</div></div>
+  </section>
+
+  <section class="view" id="view-method">
+    <h1>Metodología</h1>
+    <div id="method-out"><div class="loading">Cargando…</div></div>
+  </section>
+</main>
+
+<footer>
+  Datos: <a href="https://github.com/nflverse/nflverse-data" target="_blank" rel="noopener">nflverse</a> (CC-BY 4.0),
+  charting de <a href="https://ftndata.com" target="_blank" rel="noopener">FTN Data</a> vía nflverse (CC-BY-SA 4.0),
+  estado de lesiones de ESPN (no oficial), clima de <a href="https://open-meteo.com" target="_blank" rel="noopener">Open-Meteo</a>.
+  Herramienta de análisis estadístico; no usa ni muestra cuotas de apuestas. Los pronósticos son estimaciones con incertidumbre.
+</footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
