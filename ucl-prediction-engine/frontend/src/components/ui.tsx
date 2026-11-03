@@ -27,13 +27,16 @@ export const PHASES: Record<string, string> = {
 export function Crest({ team, size = "" }: { team: Partial<TeamRef>; size?: "" | "lg" | "sm" }) {
   const [err, setErr] = useState(false);
   const px = size === "lg" ? 72 : size === "sm" ? 22 : 36;
-  if (!team.logo || err)
+  // En la instantánea de un solo archivo los escudos van incrustados una vez y se buscan por ruta.
+  const crests = (window as unknown as { __CRESTS__?: Record<string, string> }).__CRESTS__;
+  const src = team.logo ? crests?.[team.logo] ?? team.logo : null;
+  if (!src || err)
     return (
       <span className={`crest crest-fallback ${size}`} style={{ width: px, height: px }}>
         {(team.abbreviation || team.name || "?").slice(0, 3)}
       </span>
     );
-  return <img className={`crest ${size}`} src={team.logo} alt={team.name} loading="lazy" onError={() => setErr(true)} />;
+  return <img className={`crest ${size}`} src={src} alt={team.name} loading="lazy" onError={() => setErr(true)} />;
 }
 
 export function ConfidenceBadge({ level }: { level: string }) {

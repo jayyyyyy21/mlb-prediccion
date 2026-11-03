@@ -80,6 +80,11 @@ export const STATIC = import.meta.env.VITE_STATIC === "1";
 const SNAP = "snapshot/";
 const cache = new Map<string, Promise<unknown>>();
 function snap<T>(file: string, missing = "Dato no incluido en la instantánea"): Promise<T> {
+  // Instantánea incrustada en la propia página (un solo archivo, sin peticiones de red).
+  const embedded = (window as unknown as { __SNAPSHOT__?: Record<string, unknown> }).__SNAPSHOT__;
+  if (embedded) {
+    return file in embedded ? Promise.resolve(embedded[file] as T) : Promise.reject(new Error(missing));
+  }
   if (!cache.has(file)) {
     cache.set(file, fetch(SNAP + file).then((r) => {
       if (!r.ok) throw new Error(missing);
