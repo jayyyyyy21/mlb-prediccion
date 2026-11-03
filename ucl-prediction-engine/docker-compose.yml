@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ucl
+      POSTGRES_PASSWORD: ucl
+      POSTGRES_DB: ucl
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ucl"]
+      interval: 5s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://ucl:ucl@db:5432/ucl
+      API_FOOTBALL_KEY: ${API_FOOTBALL_KEY:-}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-cambia-esto}
+      REFRESH_INTERVAL_MIN: ${REFRESH_INTERVAL_MIN:-30}
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:
