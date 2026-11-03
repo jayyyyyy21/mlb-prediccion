@@ -75,7 +75,42 @@ async function get<T>(path: string): Promise<T> {
   return r.json() as Promise<T>;
 }
 
-export const api = {
+/* Modo instantánea (VITE_STATIC=1): lee JSON exportados junto a la página, sin backend. */
+export const STATIC = import.meta.env.VITE_STATIC === "1";
+const SNAP = "snapshot/";
+const cache = new Map<string, Promise<unknown>>();
+function snap<T>(file: string, missing = "Dato no incluido en la instantánea"): Promise<T> {
+  if (!cache.has(file)) {
+    cache.set(file, fetch(SNAP + file).then((r) => {
+      if (!r.ok) throw new Error(missing);
+      return r.json();
+    }));
+  }
+  return cache.get(file) as Promise<T>;
+}
+
+const staticApi = {
+  matches: async (params: { from?: string; to?: string; team?: string }) => {
+    const all = await snap<MatchItem[]>("matches.json");
+    const parse = (x: string) =>
+      new Date(x.length === 10 ? `${x}T00:00:00Z` : /(Z|[+-]\d\d:\d\d)$/.test(x) ? x : `${x}Z`).getTime();
+    const f = params.from ? parse(params.from) : -Infinity;
+    const t = params.to ? parse(params.to) : Infinity;
+    return all.filter((m) => {
+      const k = new Date(m.kickoff).getTime();
+      return k >= f && k < t && (!params.team || m.home.id === params.team || m.away.id === params.team);
+    });
+  },
+  match: (id: string) => snap<PredictionPayload>(`match-${id}.json`,
+    "Este partido no tiene pronóstico en la instantánea (solo se incluyen los próximos partidos)."),
+  history: async (id: string) => ((await snap<Any>(`match-${id}.json`))._history ?? []) as Any[],
+  teams: () => snap<{ id: string; name: string; logo: string | null; domestic_league: string | null }[]>("teams.json"),
+  standings: () => snap<Any[]>("standings.json"),
+  backtest: () => snap<Any>("backtest.json"),
+  status: () => snap<Any>("status.json"),
+};
+
+const liveApi = {
   matches: (params: { from?: string; to?: string; team?: string }) => {
     const q = new URLSearchParams();
     Object.entries(params).forEach(([k, v]) => v && q.set(k, v));
@@ -88,3 +123,5 @@ export const api = {
   backtest: () => get<Any>("/api/backtest"),
   status: () => get<Any>("/api/status"),
 };
+
+export const api = STATIC ? staticApi : liveApi;

@@ -269,3 +269,6 @@ footer { margin: 40px 0 24px; color: var(--dim); font-size: 12px; text-align: ce
   .bigprob .b { font-size: 10px; }
   h1 { font-size: 24px; }
 }
+
+.snapshot { background: rgba(255, 181, 71, 0.08); border-bottom: 1px solid rgba(255, 181, 71, 0.3); color: #ffd9a0; font-size: 12px; }
+.snapshot .container { padding-top: 6px; padding-bottom: 6px; }

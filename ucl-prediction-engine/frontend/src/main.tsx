@@ -1,6 +1,8 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { BrowserRouter, NavLink, Route, Routes, Link } from "react-router-dom";
+import { BrowserRouter, MemoryRouter, NavLink, Route, Routes, Link } from "react-router-dom";
+import { STATIC, api } from "./api";
+import { useAsync } from "./components/ui";
 import "./styles.css";
 import Home from "./pages/Home";
 import MatchPage from "./pages/Match";
@@ -8,9 +10,25 @@ import Standings from "./pages/Standings";
 import Validation from "./pages/Validation";
 import Status from "./pages/Status";
 
+const Router = STATIC ? MemoryRouter : BrowserRouter;
+
+function SnapshotBanner() {
+  const st = useAsync(() => api.status(), []);
+  const at = st.data?.snapshot?.generated_at;
+  return (
+    <div className="snapshot">
+      <div className="container">
+        Instantánea estática{at ? ` generada el ${new Date(at + "Z").toLocaleString("es-ES", { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" })}` : ""}.
+        Los datos y pronósticos no se actualizan en vivo; para eso hay que ejecutar el servidor.
+      </div>
+    </div>
+  );
+}
+
 function App() {
   return (
-    <BrowserRouter>
+    <Router>
+      {STATIC && <SnapshotBanner />}
       <header className="topbar">
         <div className="container">
           <Link to="/" className="brand">
@@ -38,7 +56,7 @@ function App() {
         Pronósticos estadísticos con incertidumbre explícita. No son garantía de resultado ni consejo de apuesta.
         Datos: ESPN (resultados y estadísticas), Open-Meteo (clima). Sin afiliación con la UEFA.
       </footer>
-    </BrowserRouter>
+    </Router>
   );
 }
 
