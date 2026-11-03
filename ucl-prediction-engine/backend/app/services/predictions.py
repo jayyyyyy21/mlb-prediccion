@@ -14,7 +14,7 @@ from ..config import UCL_SLUG, settings
 from ..db import Availability, Match, Prediction, SessionLocal, Team, Weather, utcnow
 from ..models.dataset import rest_for_upcoming
 from ..models.engine import MODEL_VERSION
-from ..providers import api_football, espn, openmeteo
+from ..providers import api_football, espn, openmeteo, transfermarkt
 from ..providers.http import FetchError
 from . import modeling, tactics
 from .availability import team_availability
@@ -138,7 +138,7 @@ def _trigger_reason(prev: dict | None, new: dict) -> str:
     return ", ".join(r) or "nuevos datos de partidos / reajuste del modelo"
 
 
-def build_prediction(match_id: str, persist: bool = True) -> dict:
+def build_prediction(match_id: str, persist: bool = True, force: bool = False) -> dict:
     eng = modeling.get_engine()
     with SessionLocal() as s:
         m = s.get(Match, match_id)
@@ -160,7 +160,11 @@ def build_prediction(match_id: str, persist: bool = True) -> dict:
     pop = tactics.population(eng, ucl_teams, before)
     tac = tactics.matchup(eng, m.home_id, m.away_id, names, pred, prof_h, prof_a, pop)
     bt = modeling.latest_backtest()
-    conf = confidence(pred, prof_h, prof_a, av_h, av_a, bt, api_football.available())
+    from .ingest import injury_sources_status
+    inj = injury_sources_status([m.home_id, m.away_id])
+    injuries_ok = api_football.available() or all(
+        v and (utcnow() - datetime.fromisoformat(v)).total_seconds() < 48 * 3600 for v in inj.values())
+    conf = confidence(pred, prof_h, prof_a, av_h, av_a, bt, injuries_ok)
     ctx = context(m, eng, names)
     opp = opportunities(pred, (names[m.home_id], names[m.away_id]), m.odds, conf, bt)
 
@@ -178,8 +182,10 @@ def build_prediction(match_id: str, persist: bool = True) -> dict:
         "tactical": tac,
         "teams": {"home": prof_h, "away": prof_a},
         "availability": {"home": av_h, "away": av_a,
-                         "injury_source": api_football.SOURCE if api_football.available() else None,
-                         "injury_source_missing": not api_football.available()},
+                         "injury_source": (api_football.SOURCE if api_football.available()
+                                           else transfermarkt.SOURCE if injuries_ok else None),
+                         "injury_fetched_at": inj,
+                         "injury_source_missing": not injuries_ok},
         "context": ctx,
         "opportunities": opp,
         "odds": m.odds,
@@ -192,8 +198,10 @@ def build_prediction(match_id: str, persist: bool = True) -> dict:
             "sources": [
                 {"name": espn.SOURCE, "used_for": "Calendario, resultados, tiros, tiros a puerta, córners, posesión, boxscore, alineaciones, cuotas", "type": "observado"},
                 {"name": openmeteo.SOURCE, "used_for": "Clima y altitud del estadio", "type": "observado / pronóstico meteorológico"},
-                {"name": api_football.SOURCE, "used_for": "Lesiones y sanciones",
-                 "type": "observado" if api_football.available() else "NO CONECTADO (falta API_FOOTBALL_KEY)"},
+                {"name": transfermarkt.SOURCE, "used_for": "Lesiones y sanciones reportadas (incluye jugadores no inscritos en la lista UCL)",
+                 "type": "reportado (prensa/comunidad, no parte médico oficial)" if injuries_ok else "sin datos recientes"},
+                {"name": api_football.SOURCE, "used_for": "Lesiones y sanciones (opcional)",
+                 "type": "observado" if api_football.available() else "no conectado (opcional, falta API_FOOTBALL_KEY)"},
             ],
             "labels": {
                 "observed": "Estadísticas observadas: windows, splits, forma, boxscore.",
@@ -212,8 +220,10 @@ def build_prediction(match_id: str, persist: bool = True) -> dict:
         with SessionLocal() as s:
             last = s.execute(select(Prediction).where(Prediction.match_id == m.id)
                              .order_by(Prediction.id.desc()).limit(1)).scalar_one_or_none()
-            if last is None or last.inputs_hash != h:
+            if last is None or last.inputs_hash != h or force:
                 reason = _trigger_reason(last.payload if last else None, payload)
+                if force and last is not None and last.inputs_hash == h:
+                    reason = "recálculo manual (mismos datos de entrada)"
                 payload["transparency"]["update_reason"] = reason
                 s.add(Prediction(match_id=m.id, model_version=MODEL_VERSION, trigger=reason,
                                  inputs_hash=h, payload=payload))
@@ -256,7 +266,7 @@ def prediction_history(match_id: str) -> list[dict]:
     return out
 
 
-def refresh_predictions(trigger: str = "manual", days: int = 60) -> dict:
+def refresh_predictions(trigger: str = "manual", days: int = 60, force: bool = False) -> dict:
     now = utcnow()
     with SessionLocal() as s:
         ms = s.execute(select(Match.id).where(
@@ -265,7 +275,7 @@ def refresh_predictions(trigger: str = "manual", days: int = 60) -> dict:
     done, errors = 0, []
     for (mid,) in ms:
         try:
-            build_prediction(mid)
+            build_prediction(mid, force=force)
             done += 1
         except Exception as e:  # se registra y se sigue con el resto
             log.exception("predicción %s", mid)

@@ -28,6 +28,43 @@ STATUS_WEIGHT = {"confirmed": 1.0, "probable": 0.5, "not_in_xi": 1.0, "rumor": 0
 DEF_POS = ("G", "CD", "CD-L", "CD-R", "LB", "RB", "D", "LWB", "RWB", "CB")
 
 
+def _n(s: str) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    return " ".join(s.replace("-", " ").replace(".", " ").split())
+
+
+def match_player(name: str, shares: dict) -> str | None:
+    """Empareja el nombre de la fuente de bajas con el de las alineaciones ESPN
+    (acentos, nombre corto, apellido único, similitud)."""
+    import difflib
+    target = _n(name)
+    names = {pid: _n(p["name"]) for pid, p in shares.items()}
+    for pid, n in names.items():
+        if n == target:
+            return pid
+    last = target.split()[-1] if target else ""
+    cands = [pid for pid, n in names.items() if n.split() and n.split()[-1] == last]
+    if len(cands) == 1:
+        return cands[0]
+    cands = [pid for pid, n in names.items() if target in n or n in target]
+    if len(cands) == 1:
+        return cands[0]
+    best = difflib.get_close_matches(target, list(names.values()), n=1, cutoff=0.85)
+    if best:
+        return next(pid for pid, n in names.items() if n == best[0])
+    return None
+
+
+TM_POS = {"goalkeeper": "G", "centre-back": "CD", "left-back": "LB", "right-back": "RB"}
+
+
+def tm_position(pos: str | None) -> str | None:
+    if not pos:
+        return None
+    return TM_POS.get(pos.lower(), pos)
+
+
 def _player_shares(team: str, before: datetime, n_matches: int = 15) -> tuple[dict, int]:
     with SessionLocal() as s:
         mids = [m for (m,) in s.execute(
@@ -40,7 +77,12 @@ def _player_shares(team: str, before: datetime, n_matches: int = 15) -> tuple[di
     tot_ga = tot_sh = 0.0
     for a in apps:
         p = agg[a.player_id]
-        p["name"], p["pos"] = a.player_name, a.position or p["pos"]
+        p["name"] = a.player_name
+        if a.position and a.position != "SUB":
+            # posición más habitual como titular (no "SUB" de los partidos en que entró desde el banquillo)
+            p.setdefault("_pos", {})
+            p["_pos"][a.position] = p["_pos"].get(a.position, 0) + 1
+            p["pos"] = max(p["_pos"], key=p["_pos"].get)
         p["starts"] += int(a.starter)
         p["apps"] += int(a.starter or a.subbed_in)
         p["ga"] += a.goals + a.assists
@@ -72,16 +114,21 @@ def team_availability(match: Match, team: str) -> dict:
     absences = []
     seen = set()
     for r in reported:
-        pid = next((k for k, v in shares.items() if v["name"].lower() == r.player_name.lower()), None)
+        pid = match_player(r.player_name, shares)
         p = shares.get(pid, {})
         absences.append({"player": r.player_name, "status": r.status, "reason": r.reason, "source": r.source,
                          "share": p.get("share", 0.0), "start_rate": p.get("start_rate", 0.0),
-                         "position": p.get("pos"), "used_in_model": r.status in ("confirmed", "probable")})
-        seen.add(r.player_name.lower())
+                         "position": p.get("pos") or tm_position(r.position),
+                         "matched_in_lineups": pid is not None,
+                         "reported_at": r.fetched_at.isoformat() if r.fetched_at else None,
+                         "used_in_model": r.status in ("confirmed", "probable")})
+        seen.add(_n(r.player_name))
+        if pid:
+            seen.add(_n(shares[pid]["name"]))
     if lineup_confirmed:
         xi = {a.player_id for a in lineup}
         for pid, p in shares.items():
-            if p["start_rate"] >= 0.6 and pid not in xi and p["name"].lower() not in seen:
+            if p["start_rate"] >= 0.6 and pid not in xi and _n(p["name"]) not in seen:
                 absences.append({"player": p["name"], "status": "not_in_xi", "reason": "No figura en el XI confirmado",
                                  "source": "ESPN (alineación)", "share": p["share"], "start_rate": p["start_rate"],
                                  "position": p["pos"], "used_in_model": True})

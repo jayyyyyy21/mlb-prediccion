@@ -137,3 +137,35 @@ def test_opportunities_no_bet_without_odds():
                          {"test": {"result_1x2": {"model": {"log_loss": 0.9}, "baseline": {"log_loss": 1.0}}}})
     assert out2["recommendation"]["decision"] == "BET"
     assert any(p["market"] == "Gana A" for p in out2["recommendation"]["picks"])
+
+
+def test_transfermarkt_parser_and_status():
+    from datetime import date
+    from app.providers.transfermarkt import merge_for_match, parse_absences, status_for_match
+
+    def row(name, pid, pos, reason, since, ret, missed, comp=None):
+        img = f'<img src="x" title="{comp}" alt="{comp}" class="" /> ' if comp else ""
+        return (f'<tr class="odd"><td> <table class="inline-table"> <tr> <td rowspan="2"></td> <td class="hauptlink"> '
+                f'<a title="{name}" href="/x/profil/spieler/{pid}">{name}</a> </td> </tr> <tr> <td>{pos}</td> </tr> </table> '
+                f'</td><td class="zentriert">25</td><td class="links hauptlink img-vat">{img}{reason}</td>'
+                f'<td class="zentriert">{since}</td><td class="zentriert">{ret}</td><td class="zentriert"><a href="#">{missed}</a></td></tr>')
+
+    page = ('<table class="items"><tbody><tr><td class="extrarow bg_blau_20 hauptlink" colspan="6">Injuries</td></tr>'
+            + row("Ana", 1, "Centre-Back", "Knee injury", "01/10/2026", "20/11/2026", 5)
+            + row("Bea", 2, "Left Winger", "Muscle injury", "30/10/2026", "-", 1)
+            + row("Cris", 3, "Goalkeeper", "Back injury", "01/01/2026", "01/11/2026", 20)
+            + '<tr><td class="extrarow bg_blau_20 hauptlink" colspan="6">Suspensions</td></tr>'
+            + row("Ana", 1, "Centre-Back", "No eligibility", "03/09/2026", "28/01/2027", 8, "UEFA Champions League")
+            + row("Dani", 4, "Centre-Forward", "Red card suspension", "01/11/2026", "10/11/2026", 1, "Premier League")
+            + '</tbody></table><div class="keys"></div>')
+    ab = parse_absences(page)
+    assert [a.player for a in ab] == ["Ana", "Bea", "Cris", "Ana", "Dani"]
+    assert ab[0].expected_return == date(2026, 11, 20) and ab[0].position == "Centre-Back"
+    assert ab[3].competition == "UEFA Champions League"
+    d = date(2026, 11, 4)
+    assert status_for_match(ab[0], d) == "confirmed"
+    assert status_for_match(ab[1], d) == "probable"   # lesión reciente sin fecha
+    assert status_for_match(ab[2], d) == "probable"   # regreso justo antes del partido
+    assert status_for_match(ab[4], d) is None         # sanción de liga: no aplica en UCL
+    merged = {m["player"]: m for m in merge_for_match(ab, d)}
+    assert set(merged) == {"Ana", "Bea", "Cris"} and "No eligibility" in merged["Ana"]["reason"]

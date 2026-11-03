@@ -122,7 +122,8 @@ class Availability(Base):
     match_id: Mapped[str | None] = mapped_column(String(20), index=True)
     player_name: Mapped[str] = mapped_column(String(120))
     player_id: Mapped[str | None] = mapped_column(String(20))
-    reason: Mapped[str | None] = mapped_column(String(160))
+    position: Mapped[str | None] = mapped_column(String(40))
+    reason: Mapped[str | None] = mapped_column(String(300))
     status: Mapped[str] = mapped_column(String(20))
     source: Mapped[str] = mapped_column(String(80))
     fetched_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
@@ -195,4 +196,17 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 def init_db(eng=None) -> None:
-    Base.metadata.create_all(eng or engine)
+    eng = eng or engine
+    Base.metadata.create_all(eng)
+    # Migración ligera: añade columnas nuevas (nullable) a tablas ya existentes.
+    from sqlalchemy import inspect, text
+    insp = inspect(eng)
+    for table in Base.metadata.sorted_tables:
+        if not insp.has_table(table.name):
+            continue
+        have = {c["name"] for c in insp.get_columns(table.name)}
+        for col in table.columns:
+            if col.name not in have and col.nullable:
+                with eng.begin() as conn:
+                    conn.execute(text(f'ALTER TABLE {table.name} ADD COLUMN {col.name} '
+                                      f'{col.type.compile(eng.dialect)}'))

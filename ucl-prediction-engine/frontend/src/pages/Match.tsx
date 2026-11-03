@@ -419,18 +419,25 @@ function StatsTab({ p }: { p: PredictionPayload }) {
 
 /* ----------------------------------------------------------- AVAILABILITY */
 const STATUS_LABEL: Record<string, string> = {
-  confirmed: "Baja confirmada", probable: "Duda / probable", rumor: "Rumor (no usado)", not_in_xi: "Fuera del XI confirmado",
+  confirmed: "Baja", probable: "Duda", rumor: "Rumor (no usado)", not_in_xi: "Fuera del XI confirmado",
 };
 
 function AvailabilityTab({ p }: { p: PredictionPayload }) {
   const av = p.availability;
   return (
     <>
-      {av.injury_source_missing && (
+      {av.injury_source_missing ? (
         <div className="notice mb">
-          <b>Bajas no verificadas.</b> No hay una fuente de lesiones/sanciones conectada. Para activarla, configura
-          <code> API_FOOTBALL_KEY</code> en el servidor (API-Football / api-sports.io). Mientras tanto la confianza se reduce
+          <b>Bajas no verificadas.</b> No hay datos recientes de lesiones/sanciones para estos equipos. La confianza se reduce
           y solo se usan las alineaciones confirmadas que publica ESPN (~1 h antes del partido).
+        </div>
+      ) : (
+        <div className="notice info mb">
+          Bajas según <b>{av.injury_source}</b>: lesiones, sanciones aplicables a la Champions y jugadores no inscritos en la lista UCL.
+          Son bajas <i>reportadas</i> (no partes médicos oficiales). «Baja» = regreso previsto posterior al partido o lesión larga;
+          «Duda» = sin fecha de regreso o regreso justo antes del partido (cuenta al 50%).
+          {av.injury_fetched_at && Object.values(av.injury_fetched_at).filter(Boolean).length > 0 &&
+            ` Consultado: ${Object.values(av.injury_fetched_at as Record<string, string>).filter(Boolean).map((d) => new Date(d + "Z").toLocaleString("es-ES", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })).join(" / ")}.`}
         </div>
       )}
       <div className="grid g2">
@@ -447,7 +454,9 @@ function AvailabilityTab({ p }: { p: PredictionPayload }) {
               {a.absences.length === 0 ? <div className="muted small">Ninguna baja registrada por fuentes verificadas.</div> : (
                 <table><thead><tr><th>Jugador</th><th className="left">Estado</th><th>Titular %</th><th>Peso ofensivo</th></tr></thead>
                   <tbody>{a.absences.map((x: Any, i: number) => (
-                    <tr key={i}><td>{x.player}<div className="dim small">{x.reason} · {x.source}</div></td><td className="left">{STATUS_LABEL[x.status] ?? x.status}</td><td>{pct(x.start_rate)}</td><td>{pct(x.share, 1)}</td></tr>
+                    <tr key={i}><td style={{ whiteSpace: "normal", minWidth: 180 }}>{x.player}<div className="dim small">{x.reason} · {x.source}</div>
+                      {x.matched_in_lineups === false && <div className="dim small">Sin partidos recientes: su ausencia ya está reflejada en los datos.</div>}</td>
+                      <td className="left"><span className={`badge ${x.status === "confirmed" ? "baja" : x.status === "probable" ? "media" : ""}`}>{STATUS_LABEL[x.status] ?? x.status}</span></td><td>{pct(x.start_rate)}</td><td>{pct(x.share, 1)}</td></tr>
                   ))}</tbody></table>
               )}
               {a.lineup_confirmed && (<><h3 className="mt">XI confirmado</h3><div className="small">{a.lineup.map((x: Any) => `${x.player} (${x.position})`).join(" · ")}</div></>)}

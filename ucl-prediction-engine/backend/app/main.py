@@ -63,6 +63,14 @@ def _check_admin(token: str | None) -> None:
 
 
 # ---------------------------------------------------------------- endpoints
+def _tm_status() -> dict:
+    st = modeling.get_state("tm_absences") or {}
+    times = [v["fetched_at"] for v in st.values() if v.get("fetched_at")]
+    last = max(times) if times else None
+    return {"connected": bool(times), "key_required": False, "teams": len(times), "last_fetch": last,
+            "missing_message": None if times else "Aún no se han descargado bajas (python -m app.cli ingest --quick)."}
+
+
 @app.get("/api/status")
 def status():
     with SessionLocal() as s:
@@ -79,9 +87,10 @@ def status():
         "integrations": {
             "espn": {"connected": True, "key_required": False},
             "open_meteo": {"connected": True, "key_required": False},
+            "transfermarkt": _tm_status(),
             "api_football": {"connected": api_football.available(), "key_required": True,
                              "missing_message": None if api_football.available() else
-                             "Configura API_FOOTBALL_KEY en el servidor para lesiones y sanciones verificadas."},
+                             "Opcional: Transfermarkt ya cubre lesiones y sanciones. API_FOOTBALL_KEY añadiría una segunda fuente."},
             "xg_provider": {"connected": False,
                             "missing_message": "No hay proveedor de xG real conectado (Opta/StatsBomb requieren licencia). Se usa xG-proxy basado en tiros."},
         },

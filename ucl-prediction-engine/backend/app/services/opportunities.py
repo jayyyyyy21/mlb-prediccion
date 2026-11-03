@@ -43,7 +43,9 @@ def confidence(pred: dict, prof_h: dict, prof_a: dict, av_h: dict, av_a: dict, b
     else:
         add("medium", "Alineaciones aún no confirmadas.")
     if not injuries_source:
-        add("medium", "Bajas no verificadas: falta API_FOOTBALL_KEY (fuente de lesiones/sanciones).")
+        add("medium", "Bajas no verificadas: no hay datos recientes de lesiones/sanciones para estos equipos.")
+    else:
+        add("high", "Bajas verificadas en una fuente de lesiones/sanciones (Transfermarkt), actualizada en las últimas 48 h.")
     if av_h["goalkeeper_absent"] or av_a["goalkeeper_absent"]:
         add("low", "Ausencia del portero titular: impacto no cuantificado por el modelo.")
     if backtest:

@@ -39,7 +39,7 @@ pip install -r requirements.txt
 cp .env.example .env              # edita DATABASE_URL / API_FOOTBALL_KEY / ADMIN_TOKEN
 python -m app.cli ingest          # descarga histórico desde HISTORY_FROM (2024-08)
 python -m app.cli backtest        # elige hiperparámetros en validación y evalúa en prueba
-python -m app.cli predict         # pronósticos de los próximos 15 días
+python -m app.cli predict         # pronósticos de los próximos 60 días
 uvicorn app.main:app --port 8000
 
 cd ../frontend
@@ -57,7 +57,8 @@ pronósticos; también `POST /api/admin/refresh` con cabecera `X-Admin-Token`.
 |---|---|---|
 | ESPN (`site.api.espn.com`, sin clave) | Conectada | Calendario UCL, resultados, tiros, tiros a puerta, córners, posesión, faltas; boxscore detallado (pases, centros, balones largos, entradas, intercepciones, despejes); formaciones; alineaciones por partido; cuotas publicadas (DraftKings). Ligas: las domésticas de los 36 equipos que cubre ESPN + UEL, UECL y fases previas. |
 | Open-Meteo (sin clave) | Conectada | Temperatura, lluvia, viento y altitud del estadio. |
-| API-Football (api-sports.io) | **Requiere `API_FOOTBALL_KEY`** | Lesiones y sanciones (confirmadas / dudas). Sin clave, la app muestra «bajas no verificadas» y baja la confianza. |
+| Transfermarkt (páginas públicas, sin clave) | Conectada | Lesiones (motivo, desde, regreso previsto), sanciones con la competición a la que aplican y jugadores no inscritos en la lista UCL. Se descarga como mucho cada 6 h, con pausas entre peticiones. Son bajas *reportadas*, no partes médicos oficiales. |
+| API-Football (api-sports.io) | Opcional (`API_FOOTBALL_KEY`) | Segunda fuente de lesiones y sanciones. |
 | xG real (Opta / StatsBomb / Understat / FBref) | **No conectado** | Requieren licencia o bloquean el acceso automatizado. Se usa un **xG‑proxy** basado en tiros a puerta y se etiqueta como tal. |
 
 Ligas domésticas no cubiertas por ESPN (p. ej. Chequia, Eslovaquia, Azerbaiyán, Ucrania): esos equipos
@@ -82,7 +83,9 @@ esos partidos conservan el resultado pero sus estadísticas se descartan.
 5. **Posesión**: regresión ridge sobre logit(posesión).
 6. **Incertidumbre**: aproximación de Laplace (inversa del hessiano) → bandas p10–p90.
 7. **Monte Carlo**: 20.000 simulaciones por partido (goles, córners, tiros a puerta).
-8. **Bajas**: multiplicador ofensivo según la cuota de goles+asistencias y tiros del jugador ausente
+8. **Bajas** (Transfermarkt + alineaciones ESPN): «Baja» si el regreso previsto es posterior al partido o
+   la lesión es larga; «Duda» si no hay fecha o el regreso es justo antes (cuenta al 50%); las sanciones de
+   otras competiciones no aplican en Champions. Multiplicador ofensivo según la cuota de goles+asistencias y tiros del jugador ausente
    (supuesto explícito: el sustituto recupera el 50%). Rumores nunca alteran el modelo.
 9. **Ajuste táctico por estilo** (rendimiento frente a rivales de perfil de posesión similar, encogido):
    solo se activa si mejora la validación.
@@ -131,3 +134,12 @@ mejoró la validación y está desactivado. No hay suficientes cuotas histórica
   oportunidades lo penaliza.
 - Cuotas solo cuando ESPN las publica (1X2 y una línea de goles). El valor nunca se evalúa sin cuota.
 - Pronósticos estadísticos, no garantías ni consejo de apuesta.
+
+## Página estática (sin servidor)
+
+```bash
+cd backend && python -m app.export_static --out /tmp/snap
+cd ../frontend && VITE_STATIC=1 npx vite build --outDir /tmp/dist
+python ../scripts/single_file.py /tmp/snap /tmp/dist /tmp/ucl.html   # un solo HTML con datos y escudos
+```
+La página muestra siempre la fecha de la instantánea: no se actualiza en vivo.

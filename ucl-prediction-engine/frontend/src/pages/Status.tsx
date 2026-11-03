@@ -4,7 +4,8 @@ import { ErrorBox, Loading, fmtDate, useAsync } from "../components/ui";
 const NAMES: Record<string, string> = {
   espn: "ESPN (calendario, resultados, estadísticas, alineaciones, cuotas)",
   open_meteo: "Open-Meteo (clima y altitud)",
-  api_football: "API-Football (lesiones y sanciones)",
+  transfermarkt: "Transfermarkt (lesiones, sanciones y no inscritos)",
+  api_football: "API-Football (lesiones y sanciones, opcional)",
   xg_provider: "Proveedor de xG real (Opta / StatsBomb / Understat)",
 };
 

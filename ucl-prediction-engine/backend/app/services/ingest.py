@@ -21,7 +21,7 @@ from sqlalchemy import or_, select
 
 from ..config import EURO_SLUGS, UCL_SLUG, settings
 from ..db import Appearance, Availability, Match, SessionLocal, Team, TeamMatchStats, Weather, utcnow
-from ..providers import api_football, espn, openmeteo
+from ..providers import api_football, espn, openmeteo, transfermarkt
 from ..providers.http import FetchError
 
 log = logging.getLogger("ingest")
@@ -243,10 +243,96 @@ def refresh_weather(matches: list[Match]) -> int:
     return n
 
 
-def refresh_injuries(matches: list[Match]) -> int:
-    if not api_football.available():
+def _state(key):
+    from ..db import ModelState
+    with SessionLocal() as s:
+        st = s.get(ModelState, key)
+        return st.value if st else None
+
+
+def _set_state(key, value):
+    from ..db import ModelState
+    with SessionLocal() as s:
+        row = s.get(ModelState, key) or ModelState(key=key, value=value)
+        row.value = value
+        s.merge(row)
+        s.commit()
+
+
+def refresh_injuries_transfermarkt(matches: list[Match], force: bool = False) -> int:
+    """Bajas reportadas en Transfermarkt para los equipos de los próximos partidos UCL."""
+    from dataclasses import asdict
+    if not matches:
         return 0
+    now = utcnow()
+    tm_map = _state("tm_map") or {}
+    team_ids = {m.home_id for m in matches} | {m.away_id for m in matches}
+    if not all(t in tm_map for t in team_ids):
+        try:
+            clubs = transfermarkt.participants(settings.ucl_season_start)
+        except Exception as e:  # noqa: BLE001 - se registra y se sigue
+            log.warning("transfermarkt participantes: %s", e)
+            clubs = []
+        with SessionLocal() as s:
+            names = {t.id: t.name for t in s.execute(select(Team).where(Team.in_ucl)).scalars()}
+        tm_map.update(transfermarkt.match_teams(names, clubs))
+        _set_state("tm_map", tm_map)
+    cache = _state("tm_absences") or {}
+    for tid in team_ids:
+        club = tm_map.get(tid)
+        if not club:
+            continue
+        entry = cache.get(tid)
+        fresh = entry and (now - datetime.fromisoformat(entry["fetched_at"])).total_seconds() < transfermarkt.MIN_HOURS * 3600
+        if fresh and not force:
+            continue
+        try:
+            items = transfermarkt.club_absences(club["slug"], club["tm_id"])
+        except Exception as e:  # noqa: BLE001
+            log.warning("transfermarkt %s: %s", club["name"], e)
+            continue
+        cache[tid] = {"fetched_at": now.isoformat(), "club": club["name"],
+                      "items": [{**asdict(a), "since": a.since and a.since.isoformat(),
+                                 "expected_return": a.expected_return and a.expected_return.isoformat()} for a in items]}
+    _set_state("tm_absences", cache)
+
     n = 0
+    for m in matches:
+        with SessionLocal() as s:
+            for old in s.execute(select(Availability).where(
+                    Availability.match_id == m.id, Availability.source == transfermarkt.SOURCE)).scalars():
+                s.delete(old)
+            for tid in (m.home_id, m.away_id):
+                entry = cache.get(tid)
+                if not entry:
+                    continue
+                items = [transfermarkt.Absence(**{**it,
+                         "since": it["since"] and datetime.fromisoformat(it["since"]).date(),
+                         "expected_return": it["expected_return"] and datetime.fromisoformat(it["expected_return"]).date()})
+                         for it in entry["items"]]
+                for a in transfermarkt.merge_for_match(items, m.kickoff.date()):
+                    s.add(Availability(team_id=tid, match_id=m.id, player_name=a["player"], position=a["position"],
+                                       reason=a["reason"][:300], status=a["status"], source=transfermarkt.SOURCE,
+                                       fetched_at=datetime.fromisoformat(entry["fetched_at"])))
+                    n += 1
+            s.commit()
+    return n
+
+
+def injury_sources_status(team_ids: list[str]) -> dict:
+    """Qué fuente de bajas cubre a estos equipos y con qué antigüedad."""
+    cache = _state("tm_absences") or {}
+    out = {}
+    for t in team_ids:
+        e = cache.get(t)
+        out[t] = e and e["fetched_at"]
+    return out
+
+
+def refresh_injuries(matches: list[Match]) -> int:
+    n = refresh_injuries_transfermarkt(matches)
+    if not api_football.available():
+        return n
     for m in matches:
         with SessionLocal() as s:
             home, away = s.get(Team, m.home_id), s.get(Team, m.away_id)

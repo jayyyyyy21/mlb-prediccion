@@ -54,7 +54,7 @@ function App() {
       </main>
       <footer className="container">
         Pronósticos estadísticos con incertidumbre explícita. No son garantía de resultado ni consejo de apuesta.
-        Datos: ESPN (resultados y estadísticas), Open-Meteo (clima). Sin afiliación con la UEFA.
+        Datos: ESPN (resultados y estadísticas), Transfermarkt (bajas), Open-Meteo (clima). Sin afiliación con la UEFA.
       </footer>
     </Router>
   );
