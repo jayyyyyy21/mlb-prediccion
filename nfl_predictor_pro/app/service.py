@@ -15,6 +15,7 @@ from .config import CURRENT_SEASON, N_SIMS
 from .context import kickoff_utc
 from .injuries import InjuryData, evaluate_team, key_players
 from .model import DEFAULT_PARAMS, FEATURE_LABELS, PointsModel, matchup_features
+from .qb import QBModel, QBSnapshot, starters_from_schedule
 from .ratings import TEAMS, Snapshot, snapshot
 from .simulate import simulate
 from .sources import weather
@@ -47,7 +48,9 @@ class Engine:
             md = db.kv_get("production_model")
             self.model = PointsModel.from_dict(md) if md else None
             self.backtest = db.kv_get("backtest") or {}
-            self.inj = InjuryData()
+            self.qbm = QBModel(db.read_table("qb_games"), self.params["half_life"])
+            self.inj = InjuryData(self.qbm)
+            self.starters = starters_from_schedule(self.schedule[self.schedule["home_score"].notna()])
             self.teams = db.read_table("teams")
             self._snaps: dict[float, Snapshot] = {}
 
@@ -174,26 +177,51 @@ class Engine:
         if "rest_diff" in overrides:
             ctx_h["rest_diff"], ctx_a["rest_diff"] = overrides["rest_diff"], -overrides["rest_diff"]
 
+        # Lesiones y QB titular esperado: sólo para partidos no jugados (los jugados usan el titular real).
+        use_inj = not game["played"] or overrides.get("force_injuries")
+        include_prob = bool(overrides.get("include_probable"))
+        out_h = overrides.get("out_home", []) or []
+        out_a = overrides.get("out_away", []) or []
+        with_inj = bool(use_inj and season == CURRENT_SEASON)
+        inj_h = self.team_injuries(home, season, week, out_h, include_prob) if with_inj else None
+        inj_a = self.team_injuries(away, season, week, out_a, include_prob) if with_inj else None
+        qsnap = self.qbm.at(season, week)
+
+        def qb_ids(team: str, inj: dict | None) -> tuple[str | None, str | None]:
+            """(titular según depth chart, QB esperado tras aplicar las bajas)."""
+            if inj and inj.get("qb"):
+                return inj["qb"]["starter_id"], inj["qb"]["expected_id"]
+            real = self.starters.get((game.get("game_id"), team)) if game["played"] and same_teams else None
+            return real, real
+
+        (start_h, exp_h), (start_a, exp_a) = qb_ids(home, inj_h), qb_ids(away, inj_a)
+        ctx_h.update(qsnap.features(home, exp_h))
+        ctx_a.update(qsnap.features(away, exp_a))
         f_h = matchup_features(snap, home, away, ctx_h)
         f_a = matchup_features(snap, away, home, ctx_a)
         missing = [FEATURE_LABELS[k] for k in model.features if not np.isfinite(f_h.get(k, np.nan)) or not np.isfinite(f_a.get(k, np.nan))]
         if missing:
             alerts.append({"level": "warn", "text": "Faltan estadísticas para: " + ", ".join(sorted(set(missing))) +
                            ". Se usa el promedio de la liga en esas variables."})
-        base_h = float(model.predict(pd.DataFrame([f_h]))[0])
-        base_a = float(model.predict(pd.DataFrame([f_a]))[0])
-
-        # Lesiones: sólo para partidos no jugados (consistente con el backtest).
-        use_inj = not game["played"] or overrides.get("force_injuries")
-        include_prob = bool(overrides.get("include_probable"))
-        out_h = overrides.get("out_home", []) or []
-        out_a = overrides.get("out_away", []) or []
-        inj_h = evaluate_team(self.inj, home, season, week, out_h, include_prob) if use_inj and season == CURRENT_SEASON else None
-        inj_a = evaluate_team(self.inj, away, season, week, out_a, include_prob) if use_inj and season == CURRENT_SEASON else None
-        adj_h = (inj_h["off_adj"] if inj_h else 0) + (inj_a["def_adj"] if inj_a else 0)
-        adj_a = (inj_a["off_adj"] if inj_a else 0) + (inj_h["def_adj"] if inj_h else 0)
-        mu_h = max(base_h + adj_h, 3.0)
-        mu_a = max(base_a + adj_a, 3.0)
+        pred_h = float(model.predict(pd.DataFrame([f_h]))[0])
+        pred_a = float(model.predict(pd.DataFrame([f_a]))[0])
+        # Proyección base: con el titular del depth chart y sin bajas.
+        qb_pts_h, qb_pts_a = self._qb_points(qsnap, home), self._qb_points(qsnap, away)
+        base_h = pred_h - (qb_pts_h(start_h, exp_h) if exp_h != start_h else 0.0)
+        base_a = pred_a - (qb_pts_a(start_a, exp_a) if exp_a != start_a else 0.0)
+        mu_h = max(pred_h + (inj_h["off_adj"] if inj_h else 0) + (inj_a["def_adj"] if inj_a else 0), 3.0)
+        mu_a = max(pred_a + (inj_a["off_adj"] if inj_a else 0) + (inj_h["def_adj"] if inj_h else 0), 3.0)
+        adj_h, adj_a = mu_h - base_h, mu_a - base_a
+        for inj in (inj_h, inj_a):
+            q = inj.get("qb") if inj else None
+            if not q:
+                continue
+            if q["recent_differs"] and q["recent"]:
+                alerts.append({"level": "info", "text": f"{inj['team']}: se espera a {q['expected']} como QB; los partidos "
+                               f"recientes los jugó sobre todo {q['recent']}. La proyección se ajusta por ese cambio."})
+            if not q["source"].startswith("Depth chart"):
+                alerts.append({"level": "info", "text": f"{inj['team']}: sin depth chart disponible; el QB titular se "
+                               "estima por dropbacks recientes."})
 
         sd = model.sd_for_week(week) * self.params.get("sd_scale", 1.0)
         pace = np.nanmean([f_h.get("pace"), f_a.get("pace")])
@@ -215,8 +243,11 @@ class Engine:
         if use_inj and season == CURRENT_SEASON and not official:
             alerts.append({"level": "info", "text": "Aún no se publica el reporte oficial de lesiones de la semana para "
                            "ambos equipos: pronóstico preliminar."})
-        if unconfirmed_qb:
-            alerts.append({"level": "warn", "text": "El QB titular de al menos un equipo está en duda (no confirmado)."})
+        for inj in (inj_h, inj_a):
+            d = inj.get("unconfirmed_qb_detail") if inj else None
+            if d:
+                alerts.append({"level": "warn", "text": f"{inj['team']}: el QB titular {d['name']} está en duda "
+                               f"({d['status']}, no confirmado). Si no juega, su equipo cambiaría {d['impact']:+.1f} pts."})
         if use_inj and season != CURRENT_SEASON:
             alerts.append({"level": "info", "text": "No hay reportes de lesiones cargados para esa temporada."})
 
@@ -279,6 +310,30 @@ class Engine:
             self._log(game, result)
         return result
 
+    def _qb_points(self, qsnap: QBSnapshot, team: str):
+        """Puntos que cambia la proyección de `team` al sustituir un QB por otro (coeficientes calibrados)."""
+        m = self.model
+
+        def per_unit(name: str) -> float:
+            if m is None or name not in m.features:
+                return 0.0
+            i = m.features.index(name)
+            return float(m.coef[i] / m.scale[i])
+
+        cd, cl = per_unit("f_qb"), per_unit("f_qb_level")
+
+        def pts(a: str | None, b: str | None) -> float:
+            fa, fb = qsnap.features(team, a), qsnap.features(team, b)
+            return cd * (fb["qb_delta"] - fa["qb_delta"]) + cl * (fb["qb_level"] - fa["qb_level"])
+
+        return pts
+
+    def team_injuries(self, team: str, season: int, week: int, forced_out: list[str] | None = None,
+                      include_probable: bool = False) -> dict:
+        qsnap = self.qbm.at(season, week)
+        return evaluate_team(self.inj, team, season, week, forced_out, include_probable,
+                             qb_points=self._qb_points(qsnap, team))
+
     def _historical_bucket(self, fav_p: float) -> dict | None:
         for b in self.backtest.get("calibration_test", []):
             lo, hi = [int(x.strip("%")) / 100 for x in b["bin"].split("-")]
@@ -337,9 +392,6 @@ class Engine:
                                    f"{inj['scenario_off']:+.1f} pts y su defensa concedería {inj['scenario_def']:+.1f} pts.")
         tm_h = analysis.tactical_matchups(snap, self.tgd, home, away, season, week)
         tm_a = analysis.tactical_matchups(snap, self.tgd, away, home, season, week)
-        for t in tm_h + tm_a:
-            if t["metric"] == "explosive_dep":
-                uncertainty.append(t["summary"] + ".")
         if wx.get("outdoor") and (wx.get("wind") or 0) >= 15:
             uncertainty.append(f"Viento de {wx['wind']:.0f} mph: reduce el juego aéreo y los goles de campo largos.")
         if not wx.get("known"):

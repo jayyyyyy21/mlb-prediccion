@@ -41,6 +41,8 @@ FEATURES = [
     "f_miles_own",  # miles de millas viajadas
     "f_wind",       # viento por encima de 10 mph (exteriores)
     "f_cold",       # grados F por debajo de 40 (exteriores)
+    "f_qb",         # cambio de QB: (nivel del titular esperado - nivel que reflejan los ratings) x dropbacks
+    "f_qb_level",   # nivel del QB titular esperado (EPA/dropback encogido)
 ]
 
 FEATURE_LABELS = {
@@ -59,6 +61,8 @@ FEATURE_LABELS = {
     "f_miles_own": "Distancia de viaje",
     "f_wind": "Viento",
     "f_cold": "Frío",
+    "f_qb": "Cambio de quarterback respecto a los partidos anteriores",
+    "f_qb_level": "Nivel del quarterback titular esperado",
 }
 
 
@@ -93,6 +97,8 @@ def matchup_features(snap: Snapshot, team: str, opp: str, ctx: dict) -> dict:
         "f_tz_own": float(abs(ctx.get("tz_shift", 0) or 0)),
         "f_miles_own": float((ctx.get("miles", 0) or 0) / 1000),
         "f_wind": float(ctx.get("wind_eff", 0) or 0),
+        "f_qb": float(ctx.get("qb_delta", 0) or 0),
+        "f_qb_level": float(ctx["qb_level"]) if ctx.get("qb_level") is not None else np.nan,
         "f_cold": float(ctx.get("cold_eff", 0) or 0),
         "pace": pace,
     }

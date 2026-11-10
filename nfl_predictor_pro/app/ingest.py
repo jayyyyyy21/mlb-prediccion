@@ -78,5 +78,20 @@ def update_all(seasons: list[int] | None = None, refresh_hours: float = 3) -> di
     except Exception as exc:
         db.mark_source("espn_injuries", 0, "error", str(exc))
         report["lesiones_espn"] = f"error: {exc}"
+    try:
+        dc = espn.depth_chart_qbs()
+        if rost is not None and len(dc):  # vincular con el id de nflverse (gsis) vía roster
+            ids = rost[rost["espn_id"].notna()].drop_duplicates("espn_id", keep="last")
+            key = ids["espn_id"].astype(str).str.replace(r"\.0$", "", regex=True)
+            dc["gsis_id"] = dc["espn_id"].map(dict(zip(key, ids["gsis_id"])))
+        else:
+            dc["gsis_id"] = None
+        dc["fetched_at"] = db.utcnow()
+        db.write_df(dc, "depth_qb")
+        db.mark_source("espn_depth_chart", len(dc), message=f"Orden de QBs de {dc['team'].nunique()} equipos (ESPN)")
+        report["depth_chart_qb"] = f"{dc['team'].nunique()} equipos"
+    except Exception as exc:
+        db.mark_source("espn_depth_chart", 0, "error", str(exc))
+        report["depth_chart_qb"] = f"error: {exc}"
     db.kv_set("last_update", db.utcnow())
     return report

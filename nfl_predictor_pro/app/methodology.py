@@ -8,7 +8,7 @@ METHODOLOGY = [
             "Estadísticas jugada por jugada (EPA, success rate, posesiones, zona roja, capturas, pérdidas): nflverse play-by-play (modelo EP de nflfastR).",
             "Blitz y número de pass rushers: charting abierto de FTN Data publicado por nflverse (desde 2022, licencia CC-BY-SA 4.0).",
             "Reporte oficial de lesiones de la NFL, snaps por jugador y rosters semanales: nflverse.",
-            "Estado de lesiones actualizado entre reportes oficiales: endpoint público de ESPN (se etiqueta como no oficial).",
+            "Estado de lesiones actualizado entre reportes oficiales y depth chart de quarterbacks: endpoints públicos de ESPN (se etiquetan como no oficiales).",
             "Pronóstico del clima: Open-Meteo (sin API key), sólo para partidos al aire libre dentro de ~15 días.",
             "Las columnas de mercado (spread, total, moneyline) se eliminan al descargar el calendario: el modelo NUNCA usa cuotas.",
             "Cada fuente guarda fecha y hora de su última actualización (pestaña Metodología y barra superior).",
@@ -29,7 +29,8 @@ METHODOLOGY = [
         "title": "3. Proyección de puntos",
         "body": [
             "Los puntos del equipo A contra la defensa de B se estiman con una regresión ridge sobre variables estandarizadas:",
-            "Puntos_A = β0 + β1·[μ + off_pts(A) + def_pts(B)] + β2·forma reciente + β3·EPA esperado + β4·(pts por posesión × posesiones esperadas) + β5·success rate + β6·capturas + β7·pérdidas + β8·explosivas + β9·zona roja + β10·localía + β11·descanso + β12·zona horaria + β13·distancia + β14·viento + β15·frío",
+            "Puntos_A = β0 + β1·[μ + off_pts(A) + def_pts(B)] + β2·forma reciente + β3·EPA esperado + β4·(pts por posesión × posesiones esperadas) + β5·success rate + β6·capturas + β7·pérdidas + β8·explosivas + β9·zona roja + β10·localía + β11·descanso + β12·zona horaria + β13·distancia + β14·viento + β15·frío + β16·cambio de QB + β17·nivel del QB",
+            "Cambio de QB = (nivel del QB titular esperado − nivel de los QBs que jugaron los partidos anteriores del equipo) × dropbacks por partido. Nivel = EPA por dropback de las últimas 3 temporadas, encogido hacia el nivel de reemplazo con 250 dropbacks a priori. Corrige los ratings cuando el titular falta, regresa de una lesión o cambia.",
             "EPA esperado = tasa de pase esperada × (EPA pase ofensiva A + EPA pase permitido por B) + (1 − tasa de pase) × (EPA carrera A + EPA carrera permitido por B): combina el estilo de A con las debilidades de B.",
             "Posesiones esperadas = promedio de las tendencias de ritmo de ambos equipos (ajustadas por rival).",
             "El mismo cálculo se hace para B contra la defensa de A.",
@@ -41,7 +42,7 @@ METHODOLOGY = [
         "body": [
             "Sólo se aplican en la proyección principal las bajas confirmadas: reporte oficial 'Out', listas de reserva (IR/PUP/NFI) o suspensiones.",
             "'Doubtful' y 'Questionable' no se tratan como bajas: se muestran como escenario ('si no juega…') y bajan la confianza si se trata del QB titular. El simulador permite incluirlos.",
-            "QB: impacto = (EPA/dropback del suplente − EPA/dropback del titular) × dropbacks por partido del equipo. El EPA de cada QB se encoge hacia el nivel de reemplazo con 250 dropbacks a priori (los QB con poca muestra se asumen de nivel suplente). Tope ±10 pts.",
+            "QB: el titular esperado se toma del depth chart de ESPN (si no está disponible, de los dropbacks recientes) y de las bajas aplicadas. Su efecto entra por las variables 'cambio de QB' y 'nivel del QB', cuyos coeficientes se calibran en el backtest con el titular real de cada partido histórico. Añadirlas redujo el error de puntos y el Brier tanto en validación como en prueba.",
             "Otras posiciones: impacto = valor posicional a priori × % de snaps del jugador en los últimos 3 partidos del equipo (máx. 4 pts por unidad). Valores a priori (pts por partido para un titular a tiempo completo): WR 0.55, TE 0.40, RB 0.30, T 0.45, G 0.30, C 0.35, DE 0.45, DT 0.30, LB 0.25, CB 0.45, S 0.30.",
             "Estos valores a priori NO están calibrados con el backtest (no existen reportes históricos tal como se conocían antes de cada partido). Si un jugador ya faltó en partidos recientes, su % de snaps reciente es bajo y su impacto también: los ratings ya reflejan su ausencia.",
         ],
@@ -63,7 +64,8 @@ METHODOLOGY = [
             "Métricas: error absoluto medio (MAE) de puntos por equipo, del margen y del total; Brier score y log-loss de la probabilidad de victoria; tabla de calibración (probabilidad predicha vs frecuencia observada).",
             "Comparación con modelos ingenuos: promedio de la liga y promedios simples de puntos anotados/permitidos.",
             "Pronósticos en vivo: cada pronóstico de un partido futuro se guarda con fecha y hora; el historial usa el último guardado ANTES del inicio del partido.",
-            "Limitaciones: el backtest no incluye ajustes por lesiones y usa el clima registrado del día como aproximación del pronóstico.",
+            "Limitaciones: el backtest usa el QB titular real de cada partido (en producción el titular esperado puede fallar), no incluye ajustes por lesiones de otras posiciones y usa el clima registrado del día como aproximación del pronóstico.",
+            "Variables evaluadas y descartadas (no mejoraron la validación): pérdidas de balón esperadas del rival, jugadas explosivas separadas en pase y carrera, y enfrentamiento de pase profundo. Tampoco predicen errores más grandes, así que no se usan para ajustar la incertidumbre.",
         ],
     },
     {

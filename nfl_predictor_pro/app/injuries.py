@@ -10,8 +10,10 @@ Clasificación (no se considera baja confirmada sin información oficial):
 * disponible   – sin designación.
 
 Impacto en puntos:
-* QB: diferencia de EPA por dropback (con encogimiento bayesiano) entre el
-  titular y su reemplazo, multiplicada por los dropbacks por partido del equipo.
+* QB: el titular esperado sale del depth chart de ESPN (o, si no está
+  disponible, de los dropbacks recientes) y de las bajas aplicadas. Su efecto
+  entra al modelo como variable calibrada en el backtest (ver qb.py), no como
+  un ajuste fijo.
 * Otras posiciones: valor posicional a priori x porcentaje de snaps reciente.
   Estos valores a priori NO se calibran en el backtest (no hay reportes
   históricos fiables tal como se conocían antes de cada partido); se muestran
@@ -23,6 +25,7 @@ import numpy as np
 import pandas as pd
 
 from . import db
+from .qb import QBModel
 
 # Puntos por partido que pierde (ofensiva) o concede de más (defensa) un equipo
 # cuando falta un titular con 100% de snaps y entra un reemplazo típico.
@@ -35,8 +38,9 @@ POSITION_VALUE = {
 }
 OFFENSE = {"QB", "WR", "TE", "RB", "HB", "FB", "T", "OT", "G", "C", "OL"}
 UNIT_CAP = 4.0          # tope de impacto acumulado por unidad (sin contar QB)
-QB_PRIOR_DB = 250.0     # dropbacks de encogimiento para EPA del QB
-QB_CAP = 10.0
+GENERIC_QB = "__reemplazo__"   # QB desconocido: se asume nivel de reemplazo
+SRC_DEPTH = "Depth chart de ESPN"
+SRC_RECENT = "Estimado por dropbacks recientes (sin depth chart)"
 RESERVE_STATUS = {"RES", "PUP", "NFI", "SUS", "IR"}
 POSITION_ES = {
     "QB": "Quarterback", "WR": "Receptor", "TE": "Ala cerrada", "RB": "Corredor", "HB": "Corredor", "FB": "Fullback",
@@ -51,60 +55,56 @@ POSITION_ES = {
 class InjuryData:
     """Carga una vez las tablas necesarias para evaluar disponibilidad."""
 
-    def __init__(self) -> None:
+    def __init__(self, qbm: QBModel | None = None) -> None:
         self.official = db.read_table("injuries_official")
         self.espn = db.read_table("injuries_espn")
         self.rosters = db.read_table("rosters")
         self.snaps = db.read_table("snaps")
         self.qb = db.read_table("qb_games")
-        self._qb_rates = self._qb_epa_rates()
+        self.depth = db.read_table("depth_qb")
+        self.qbm = qbm or QBModel(self.qb)
 
     # ---------------- QB ----------------
-    def _qb_epa_rates(self) -> pd.DataFrame:
-        if self.qb.empty:
-            return pd.DataFrame()
-        q = self.qb.copy()
-        seasons = sorted(q["season"].unique())
-        recent = q[q["season"] >= seasons[-1] - 2]
-        per = recent.groupby("gsis_id").agg(db=("dropbacks", "sum"), epa=("qb_epa_sum", "sum"),
-                                           name=("passer", "last")).reset_index()
-        # Nivel de reemplazo: EPA/dropback de QBs con poco volumen (suplentes).
-        backups = per[per["db"] < 300]
-        self.replacement_epa = float(backups["epa"].sum() / max(backups["db"].sum(), 1)) if len(backups) else -0.15
-        per["epa_shrunk"] = (per["epa"] + self.replacement_epa * QB_PRIOR_DB) / (per["db"] + QB_PRIOR_DB)
-        return per.set_index("gsis_id")
-
     def qb_depth(self, team: str, season: int, week: int) -> list[dict]:
-        """QBs del equipo ordenados por titularidad reciente (dropbacks en sus últimos 3 partidos)."""
+        """QBs del equipo en orden de titularidad esperada.
+
+        Con depth chart de ESPN: ese orden. Sin él: primero quien más dropbacks
+        tuvo en los últimos 3 partidos y después los suplentes por experiencia.
+        """
+        qsnap = self.qbm.at(season, week)
         q = self.qb[(self.qb["team"] == team) & (self.qb["season"] == season) & (self.qb["week"] < week)]
-        last_games = sorted(q["game_id"].unique(), key=lambda g: q[q["game_id"] == g]["week"].iloc[0])[-3:]
+        last_games = list(q.sort_values("week")["game_id"].drop_duplicates())[-3:]
         recent = q[q["game_id"].isin(last_games)].groupby("gsis_id")["dropbacks"].sum()
-        roster_qbs = self._roster(team, season, week)
-        roster_qbs = roster_qbs[roster_qbs["position"] == "QB"] if not roster_qbs.empty else roster_qbs
-        ids = set(recent.index) | set(roster_qbs["gsis_id"].dropna()) if not roster_qbs.empty else set(recent.index)
+        roster = self._roster(team, season, week)
+        roster_qbs = roster[roster["position"] == "QB"] if not roster.empty else roster
+        names = dict(zip(roster_qbs["gsis_id"], roster_qbs["full_name"])) if not roster_qbs.empty else {}
+        depth = self.depth[self.depth["team"] == team].sort_values("rank") if not self.depth.empty else pd.DataFrame()
+        rank: dict[str, int] = {}
+        for r in depth.itertuples(index=False):
+            gid = r.gsis_id if isinstance(r.gsis_id, str) else f"espn:{r.espn_id}"
+            rank.setdefault(gid, int(r.rank))
+            names.setdefault(gid, r.full_name)
+        ids = set(recent.index) | set(names)
         out = []
         for gid in ids:
-            rate = self._qb_rates.loc[gid] if gid in self._qb_rates.index else None
-            name = None
-            if not roster_qbs.empty and gid in set(roster_qbs["gsis_id"]):
-                name = roster_qbs[roster_qbs["gsis_id"] == gid]["full_name"].iloc[0]
-            if name is None and rate is not None:
-                name = rate["name"]
             out.append({
-                "gsis_id": gid, "name": name or gid,
+                "gsis_id": gid, "name": names.get(gid) or qsnap.name(gid) or gid,
                 "recent_db": int(recent.get(gid, 0)),
-                "career_db": int(rate["db"]) if rate is not None else 0,
-                "epa_db": float(rate["epa_shrunk"]) if rate is not None else self.replacement_epa,
-                "on_roster": bool(not roster_qbs.empty and gid in set(roster_qbs["gsis_id"])),
+                "career_db": qsnap.volume(gid),
+                "epa_db": qsnap.level(gid),
+                "on_roster": gid in names,
+                "depth_rank": rank.get(gid),
             })
-        out.sort(key=lambda r: (-r["recent_db"], -r["career_db"]))
+        if rank:
+            out.sort(key=lambda r: (r["depth_rank"] is None, r["depth_rank"] or 0, -r["recent_db"], -r["career_db"]))
+            source = SRC_DEPTH
+        else:
+            out.sort(key=lambda r: (-r["recent_db"], -r["career_db"]))
+            out = out[:1] + _backup_order(out[1:])
+            source = SRC_RECENT
+        for r in out:
+            r["source"] = source
         return out
-
-    def team_dropbacks_pg(self, team: str, season: int) -> float:
-        q = self.qb[(self.qb["team"] == team) & (self.qb["season"] == season)]
-        if q.empty:
-            return 36.0
-        return float(q.groupby("game_id")["dropbacks"].sum().mean())
 
     # ---------------- Roster / snaps ----------------
     def _roster(self, team: str, season: int, week: int) -> pd.DataFrame:
@@ -194,21 +194,28 @@ class InjuryData:
 def _backup_order(qbs: list[dict]) -> list[dict]:
     """Suplente estimado: experiencia acumulada (dropbacks) con más peso a los recientes.
 
-    Sin depth chart oficial en los datos abiertos, es una aproximación; la
-    interfaz muestra qué suplente se asumió.
+    Sólo se usa cuando no hay depth chart disponible; la interfaz muestra qué
+    suplente se asumió.
     """
     return sorted(qbs, key=lambda q: -(q["career_db"] + 3 * q["recent_db"]))
 
 
 def evaluate_team(data: InjuryData, team: str, season: int, week: int,
-                  forced_out: list[str] | None = None, include_probable: bool = False) -> dict:
+                  forced_out: list[str] | None = None, include_probable: bool = False,
+                  qb_points=None) -> dict:
     """Impacto estimado de las bajas de `team`.
 
-    Devuelve ajustes para la ofensiva propia (off_adj, negativo = menos puntos)
-    y para la ofensiva rival (def_adj, positivo = el rival anota más), además
-    de la lista de jugadores evaluados.
+    Devuelve ajustes de posiciones distintas al QB para la ofensiva propia
+    (off_adj, negativo = menos puntos) y para la ofensiva rival (def_adj,
+    positivo = el rival anota más), el QB titular esperado y la lista de
+    jugadores evaluados. `qb_points(de, a)` da los puntos que cambia la
+    proyección al sustituir un QB por otro según el modelo calibrado.
     """
     forced_out = forced_out or []
+    qsnap = data.qbm.at(season, week)
+    if qb_points is None:  # sin modelo: estimación bruta EPA x dropbacks
+        def qb_points(a, b):
+            return (qsnap.level(b) - qsnap.level(a)) * qsnap.dropbacks(team)
     st = data.statuses(team, season, week)
     shares = data.snap_shares(team, season, week)
     roster = data._roster(team, season, week)
@@ -230,21 +237,34 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
     applied = {"confirmada", "simulada"} | ({"probable"} if include_probable else set())
     qbs = data.qb_depth(team, season, week)
     unavailable_ids = {p["gsis_id"] for p in players if p["category"] in applied}
+    # Jugadores del reporte sin id vinculado: se emparejan por nombre con el depth chart.
+    unavailable_names = {p["name"] for p in players if p["category"] in applied and not p.get("gsis_id")}
+
+    def available(q):
+        return q["on_roster"] and q["gsis_id"] not in unavailable_ids and q["name"] not in unavailable_names
+
+    def next_after(skip_id):
+        return next((q for q in qbs if q["gsis_id"] != skip_id and available(q)), None)
+
     off_adj = def_adj = 0.0
     off_other = def_other = 0.0
     qb_info = None
     if qbs:
         starter = qbs[0]
-        healthy = _backup_order([q for q in qbs[1:] if q["gsis_id"] not in unavailable_ids and q["on_roster"]])
-        dbpg = data.team_dropbacks_pg(team, season)
-        qb_info = {"starter": starter["name"], "starter_epa_db": starter["epa_db"], "dropbacks_pg": dbpg}
-        if starter["gsis_id"] in unavailable_ids:
-            repl = healthy[0] if healthy else None
-            repl_epa = repl["epa_db"] if repl else data.replacement_epa
-            delta = float(np.clip((repl_epa - starter["epa_db"]) * dbpg, -QB_CAP, QB_CAP))
-            off_adj += delta
-            qb_info.update(replacement=repl["name"] if repl else "Reemplazo genérico", replacement_epa_db=repl_epa,
-                           impact=delta)
+        expected = next((q for q in qbs if available(q)), None)
+        exp_id = expected["gsis_id"] if expected else GENERIC_QB
+        recent_qb = max(qbs, key=lambda q: q["recent_db"])
+        qb_info = {
+            "starter": starter["name"], "starter_id": starter["gsis_id"], "starter_epa_db": starter["epa_db"],
+            "expected": expected["name"] if expected else "Reemplazo genérico", "expected_id": exp_id,
+            "expected_epa_db": qsnap.level(exp_id), "source": starter["source"],
+            "dropbacks_pg": qsnap.dropbacks(team), "ratings_epa_db": qsnap.base(team),
+            "recent": recent_qb["name"] if recent_qb["recent_db"] > 0 else None,
+            "recent_differs": bool(recent_qb["recent_db"] > 0 and recent_qb["gsis_id"] != exp_id),
+        }
+        if exp_id != starter["gsis_id"]:
+            qb_info.update(replacement=qb_info["expected"], replacement_epa_db=qb_info["expected_epa_db"],
+                           impact=float(qb_points(starter["gsis_id"], exp_id)))
 
     for p in players:
         pos = p.get("position") or "?"
@@ -260,13 +280,13 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
         p["snap_share"] = round(share, 3)
         if pos == "QB":
             impact = 0.0
-            if qbs and gid == qbs[0]["gsis_id"]:
-                starter_epa = qbs[0]["epa_db"]
-                others = _backup_order([q for q in qbs[1:] if q["on_roster"] and q["gsis_id"] not in unavailable_ids])
-                repl_epa = others[0]["epa_db"] if others else data.replacement_epa
-                impact = float(np.clip((repl_epa - starter_epa) * data.team_dropbacks_pg(team, season), -QB_CAP, QB_CAP))
+            is_starter = bool(qbs) and (gid == qbs[0]["gsis_id"] or (not gid and p.get("name") == qbs[0]["name"]))
+            if is_starter:
+                repl = next_after(qbs[0]["gsis_id"])
+                impact = float(qb_points(qbs[0]["gsis_id"], repl["gsis_id"] if repl else GENERIC_QB))
             p["impact"] = round(impact, 2)
             p["side"] = "ofensiva"
+            p["is_starter_qb"] = is_starter
         else:
             val = POSITION_VALUE.get(pos, 0.0)
             is_off = pos in OFFENSE
@@ -292,6 +312,8 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
             else:
                 scen_def += p["impact"]
     players.sort(key=lambda p: -abs(p.get("impact", 0)))
+    doubt = next((p for p in players if p.get("is_starter_qb") and p["category"] in ("probable", "cuestionable")
+                  and not p["applied"]), None)
     return {
         "team": team,
         "official_report": data.official_week_published(team, season, week),
@@ -302,8 +324,9 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
         "qb": qb_info,
         "qb_depth": qbs[:4],
         "players": players,
-        "unconfirmed_qb": any(p["position"] == "QB" and p["category"] in ("probable", "cuestionable")
-                              and qbs and p["gsis_id"] == qbs[0]["gsis_id"] for p in players),
+        "unconfirmed_qb": doubt is not None,
+        "unconfirmed_qb_detail": ({"name": doubt["name"], "status": doubt["status"], "impact": doubt["impact"]}
+                                  if doubt else None),
     }
 
 
@@ -314,7 +337,7 @@ def key_players(data: InjuryData, team: str, season: int, week: int, n: int = 22
     out = []
     for q in data.qb_depth(team, season, week)[:3]:
         out.append({"gsis_id": q["gsis_id"], "name": q["name"], "position": "QB", "snap_share": None,
-                    "note": f"{q['recent_db']} dropbacks recientes"})
+                    "note": ("titular según depth chart · " if q.get("depth_rank") == 1 else "") + f"{q['recent_db']} dropbacks recientes"})
     if shares.empty or roster.empty:
         return out
     m = shares.merge(roster[["pfr_id", "gsis_id"]], left_on="pfr_player_id", right_on="pfr_id", how="inner")

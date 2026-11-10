@@ -223,14 +223,19 @@ function splitsTable(summary, side) {
 
 function injuriesHtml(inj) {
   if (!inj) return `<div class="muted small">Sin información de lesiones aplicable (partido jugado o temporada sin reportes).</div>`;
-  const qb = inj.qb ? `<div class="small" style="margin-bottom:6px">QB titular: <b>${esc(inj.qb.starter)}</b> (EPA/dropback encogido ${fmt(inj.qb.starter_epa_db, 3)}, ${fmt(inj.qb.dropbacks_pg, 0)} dropbacks/p)${inj.qb.replacement ? ` → reemplazo: <b>${esc(inj.qb.replacement)}</b> (${fmt(inj.qb.replacement_epa_db, 3)}), impacto ${sign(inj.qb.impact)} pts` : ""}</div>` : "";
+  const q = inj.qb;
+  const qb = q ? `<div class="small" style="margin-bottom:6px">QB titular esperado: <b>${esc(q.expected)}</b>
+    (nivel ${fmt(q.expected_epa_db, 3)} EPA/dropback; los partidos anteriores del equipo reflejan ${fmt(q.ratings_epa_db, 3)}; ${fmt(q.dropbacks_pg, 0)} dropbacks/p).
+    ${q.replacement ? `Sustituye a <b>${esc(q.starter)}</b> (${fmt(q.starter_epa_db, 3)}): ${sign(q.impact)} pts.` : ""}
+    ${q.recent_differs && q.recent ? `Los partidos recientes los jugó sobre todo ${esc(q.recent)}.` : ""}
+    <span class="muted">Fuente del titular: ${esc(q.source)}.</span></div>` : "";
   const all = (inj.players || []).filter((p) => p.category !== "disponible");
   // Jugadores en reserva que no jugaban recientemente: sin impacto (los ratings ya reflejan su ausencia).
   const quiet = all.filter((p) => p.category === "confirmada" && !p.impact && !p.snap_share && p.position !== "QB");
   const rows = all.filter((p) => !quiet.includes(p)).slice(0, 25);
   const catEs = { confirmada: "Baja confirmada", probable: "Baja probable (no confirmada)", cuestionable: "Cuestionable", simulada: "Baja simulada" };
   return `${qb}<div class="small muted" style="margin-bottom:6px">${inj.official_report ? "Reporte oficial de la semana publicado." : "Reporte oficial de la semana aún no publicado: se usan listas de reserva y reportes de ESPN (no oficiales)."}
-    Ajuste aplicado: ofensiva ${sign(inj.off_adj)} pts · defensa ${sign(inj.def_adj)} pts permitidos.</div>
+    Ajuste aplicado por bajas (sin contar al QB): ofensiva ${sign(inj.off_adj)} pts · defensa ${sign(inj.def_adj)} pts permitidos.</div>
     ${rows.length ? `<div class="table-wrap"><table><thead><tr><th>Jugador</th><th>Pos.</th><th>Estado</th><th>Snaps recientes</th><th>Impacto (pts)</th><th>Aplicado</th></tr></thead><tbody>
     ${rows.map((p) => `<tr><td class="wrap">${esc(p.name)}<div class="muted small">${esc(p.source)}${p.detail ? " · " + esc(p.detail) : ""}</div></td><td>${esc(p.position)}</td><td class="wrap">${esc(catEs[p.category] || p.category)}<div class="muted small">${esc(p.status)}</div></td><td>${p.snap_share != null ? pct(p.snap_share) : "—"}</td><td>${sign(p.impact, 2)}</td><td>${p.applied ? "Sí" : "No (escenario)"}</td></tr>`).join("")}
     </tbody></table></div>` : `<div class="muted small">Sin bajas relevantes reportadas.</div>`}
@@ -300,11 +305,11 @@ function renderPrediction(el, r, key) {
   <div class="card section"><h2>¿Por qué se proyectan esos puntos?</h2>
     <div class="grid g2">
       <div><h3>${esc(teamName(away))}: ${fmt(p.away_points)} pts</h3><p>${esc(ex.away_baseline)}</p>
-        <p class="small muted">Modelo base ${fmt(p.away_points_base)} pts · ajuste por lesiones ${sign(p.away_injury_adj)} pts. Aporte de cada factor respecto a un partido promedio:</p>
-        ${contribHtml(ex.away_contributions.slice(0, 10), teamColor(away))}</div>
+        <p class="small muted">Con el QB titular y sin bajas: ${fmt(p.away_points_base)} pts · ajuste por bajas ${sign(p.away_injury_adj)} pts. Aporte de cada factor respecto a un partido promedio:</p>
+        ${contribHtml(ex.away_contributions.slice(0, 12), teamColor(away))}</div>
       <div><h3>${esc(teamName(home))}: ${fmt(p.home_points)} pts</h3><p>${esc(ex.home_baseline)}</p>
-        <p class="small muted">Modelo base ${fmt(p.home_points_base)} pts · ajuste por lesiones ${sign(p.home_injury_adj)} pts. Aporte de cada factor respecto a un partido promedio:</p>
-        ${contribHtml(ex.home_contributions.slice(0, 10), teamColor(home))}</div>
+        <p class="small muted">Con el QB titular y sin bajas: ${fmt(p.home_points_base)} pts · ajuste por bajas ${sign(p.home_injury_adj)} pts. Aporte de cada factor respecto a un partido promedio:</p>
+        ${contribHtml(ex.home_contributions.slice(0, 12), teamColor(home))}</div>
     </div>
     <p class="small muted">Las variables están correlacionadas entre sí (p. ej. puntos y EPA): interprete los aportes en conjunto. Coeficientes calibrados con temporadas anteriores.</p>
   </div>

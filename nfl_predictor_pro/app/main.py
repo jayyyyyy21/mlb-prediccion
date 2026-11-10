@@ -151,7 +151,6 @@ def compare(a: str, b: str, season: int = CURRENT_SEASON):
         raise HTTPException(404, "Equipo no encontrado")
     e = engine()
     from . import analysis
-    from .injuries import evaluate_team
     week = e.default_week(season) if season == CURRENT_SEASON else 30
     snap = e.snap(season, min(week, 23))
     payload = {
@@ -160,7 +159,7 @@ def compare(a: str, b: str, season: int = CURRENT_SEASON):
                      "b_offense": analysis.tactical_matchups(snap, e.tgd, b, a, season, week)},
     }
     if season == CURRENT_SEASON:
-        payload["injuries"] = {"a": evaluate_team(e.inj, a, season, week), "b": evaluate_team(e.inj, b, season, week)}
+        payload["injuries"] = {"a": e.team_injuries(a, season, week), "b": e.team_injuries(b, season, week)}
     return ok(payload)
 
 

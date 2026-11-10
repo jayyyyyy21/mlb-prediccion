@@ -45,3 +45,33 @@ def injuries() -> pd.DataFrame:
                 }
             )
     return pd.DataFrame(rows)
+
+
+ESPN_TEAMS_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams"
+ESPN_DEPTH_URL = "https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/{team_id}/depthcharts"
+
+
+def depth_chart_qbs() -> pd.DataFrame:
+    """Orden de quarterbacks de cada equipo según el depth chart de ESPN.
+
+    Sirve para saber quién es el titular esperado cuando cambia sin que haya
+    una baja en el reporte de lesiones (regreso de un lesionado, cambio de
+    titular). Los equipos cuya consulta falla simplemente no aparecen.
+    """
+    headers = {"User-Agent": USER_AGENT}
+    r = requests.get(ESPN_TEAMS_URL, timeout=HTTP_TIMEOUT, headers=headers)
+    r.raise_for_status()
+    teams = [t["team"] for t in r.json()["sports"][0]["leagues"][0]["teams"]]
+    rows = []
+    for t in teams:
+        abbr = ESPN_TEAM_FIX.get(t["abbreviation"], t["abbreviation"])
+        try:
+            d = requests.get(ESPN_DEPTH_URL.format(team_id=t["id"]), timeout=HTTP_TIMEOUT, headers=headers)
+            d.raise_for_status()
+            charts = d.json().get("depthchart", [])
+        except (requests.RequestException, ValueError):
+            continue
+        qbs = next((c["positions"]["qb"].get("athletes", []) for c in charts if "qb" in c.get("positions", {})), [])
+        for rank, ath in enumerate(qbs, start=1):
+            rows.append({"team": abbr, "rank": rank, "espn_id": str(ath.get("id")), "full_name": ath.get("displayName")})
+    return pd.DataFrame(rows, columns=["team", "rank", "espn_id", "full_name"])

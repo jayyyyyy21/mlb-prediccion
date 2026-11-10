@@ -11,10 +11,12 @@ Procedimiento:
 4. Las probabilidades de victoria salen de la simulación Monte Carlo con la
    misma configuración que se usa en producción.
 
-Limitación documentada: el backtest no incluye ajustes por lesiones (los
-reportes históricos no se reconstruyen tal como se conocían antes de cada
-partido) y usa el clima registrado el día del partido como aproximación del
-pronóstico disponible antes del juego.
+Limitaciones documentadas: el backtest usa como QB esperado al titular real
+de cada partido (normalmente conocido antes del inicio; en producción se
+toma del depth chart y del reporte de lesiones, que pueden fallar). No incluye
+ajustes por lesiones de otras posiciones (los reportes históricos no se
+reconstruyen tal como se conocían antes de cada partido) y usa el clima
+registrado el día del partido como aproximación del pronóstico.
 """
 from __future__ import annotations
 
@@ -29,6 +31,7 @@ import pandas as pd
 from . import data, db
 from .config import CURRENT_SEASON, FIRST_SEASON, N_SIMS
 from .model import DEFAULT_PARAMS, PointsModel, matchup_features
+from .qb import QBModel, starters_from_schedule
 from .simulate import simulate
 from .ratings import snapshot
 
@@ -41,15 +44,24 @@ def norm_cdf(x: float) -> float:
     return 0.5 * (1 + math.erf(x / math.sqrt(2)))
 
 
-def walk_forward_features(tg_all: pd.DataFrame, tg: pd.DataFrame, params: dict, first_season: int) -> pd.DataFrame:
-    """Variables del modelo para cada fila equipo-partido, con ratings previos al partido."""
+def walk_forward_features(tg_all: pd.DataFrame, tg: pd.DataFrame, params: dict, first_season: int,
+                          qbm: QBModel | None = None, starters: dict | None = None) -> pd.DataFrame:
+    """Variables del modelo para cada fila equipo-partido, con ratings previos al partido.
+
+    El QB esperado de cada partido histórico es el titular real (dato que se
+    conoce antes del inicio); su nivel se estima sólo con partidos anteriores.
+    """
     rows = []
+    starters = starters or {}
     target = tg_all[(tg_all["season"] >= first_season) & tg_all["pts_for"].notna()]
     for (season, week), grp in target.groupby(["season", "week"]):
         snap = snapshot(tg, season * 30 + week, params)
+        qsnap = qbm.at(season, week) if qbm is not None else None
         for r in grp.itertuples(index=False):
             ctx = {c: getattr(r, c) for c in CTX_COLS}
             ctx = {k: (0.0 if (v is None or (isinstance(v, float) and np.isnan(v))) else v) for k, v in ctx.items()}
+            if qsnap is not None:
+                ctx.update(qsnap.features(r.team, starters.get((r.game_id, r.team))))
             f = matchup_features(snap, r.team, r.opp, ctx)
             f.update(game_id=r.game_id, season=season, week=week, team=r.team, opp=r.opp, loc=r.loc,
                      game_type=r.game_type, pts=r.pts_for, pts_against=r.pts_against)
@@ -172,7 +184,9 @@ def baselines(tg: pd.DataFrame, pred: pd.DataFrame) -> dict:
 def run(val_seasons: tuple[int, ...] | None = None, test_seasons: tuple[int, ...] | None = None,
         grid: dict | None = None, save: bool = True) -> dict:
     t0 = time.time()
-    _, tg_all, tg = data.load()
+    sched, tg_all, tg = data.load()
+    qb_games = db.read_table("qb_games")
+    starters = starters_from_schedule(sched[sched["home_score"].notna()])
     first_feat = FIRST_SEASON + 1  # la primera temporada sólo aporta historia a los ratings
     val_seasons = val_seasons or (FIRST_SEASON + 3, FIRST_SEASON + 4, FIRST_SEASON + 5)
     test_seasons = test_seasons or tuple(range(max(val_seasons) + 1, CURRENT_SEASON + 1))
@@ -184,7 +198,7 @@ def run(val_seasons: tuple[int, ...] | None = None, test_seasons: tuple[int, ...
     for hl, lam in itertools.product(grid["half_life"], grid["lam"]):
         params = {**DEFAULT_PARAMS, "half_life": hl, "lam": lam}
         key = (hl, lam)
-        feat_cache[key] = walk_forward_features(tg_all, tg, params, first_feat)
+        feat_cache[key] = walk_forward_features(tg_all, tg, params, first_feat, QBModel(qb_games, hl), starters)
         for rb in grid["ridge_beta"]:
             models = fit_season_models(feat_cache[key], list(val_seasons), rb)
             m = metrics(predict_games(feat_cache[key], models, mc=False))

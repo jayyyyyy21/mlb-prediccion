@@ -44,8 +44,8 @@ Ninguna fuente requiere API key ni credenciales.
 |---|---|---|
 | [nflverse-data](https://github.com/nflverse/nflverse-data) | Calendario, resultados, play-by-play (EPA, success rate), reporte oficial de lesiones, snaps, rosters | CC-BY 4.0 (atribuir a nflverse) |
 | FTN Data vía nflverse | Blitz y pass rushers (desde 2022) | CC-BY-SA 4.0 |
-| ESPN (endpoint público) | Estado de lesiones entre reportes oficiales; marcado como **no oficial** | Endpoint no documentado; uso personal, puede cambiar |
-| [Open-Meteo](https://open-meteo.com) | Pronóstico del clima (≤15 días) en estadios abiertos | Gratis para uso no comercial |
+| ESPN (endpoints públicos) | Estado de lesiones entre reportes oficiales y depth chart de QBs; marcados como **no oficiales** | Endpoint no documentado; uso personal, puede cambiar |
+| [Open-Meteo](https://open-meteo.com) y [weather.gov](https://www.weather.gov/documentation/services-web-api) | Pronóstico del clima en estadios abiertos (weather.gov como respaldo, sólo EE.UU.) | Gratis; Open-Meteo para uso no comercial |
 
 NFL.com y Pro Football Reference no ofrecen API abierta; sus términos prohíben el scraping, así que no se
 consultan directamente (nflverse publica datos equivalentes con licencia abierta).
@@ -71,27 +71,34 @@ La explicación completa, con fórmulas, está en la pestaña **Metodología** (
 
 1. **Ratings ajustados por rival.** Para cada métrica `y(ofensiva A, defensa B) = μ + off[A] + def[B] + h·localía`,
    regresión ridge ponderada (decaimiento exponencial, vida media de 10 semanas; λ = 4 partidos de regresión a la media).
-2. **Proyección de puntos.** Regresión ridge sobre 15 variables: puntos ajustados, forma reciente, EPA esperado
+2. **Proyección de puntos.** Regresión ridge sobre 17 variables: puntos ajustados, forma reciente, EPA esperado
    (pase/carrera de A contra lo que permite B, ponderado por tendencia de pase), puntos por posesión × posesiones,
-   success rate, capturas, pérdidas, explosivas, zona roja, localía, descanso, zona horaria, distancia, viento y frío.
-   La localía no se asume: su efecto es un coeficiente estimado (~+0.8 pts por equipo).
-3. **Lesiones.** Sólo bajas confirmadas (reporte oficial *Out*, IR/PUP/NFI, suspensión) entran a la proyección
-   principal. *Doubtful/Questionable* se muestran como escenario. QB: diferencia de EPA/dropback titular vs suplente
-   × dropbacks por partido. Otras posiciones: valor posicional a priori × % de snaps recientes (no calibrado; se indica).
+   success rate, capturas, pérdidas, explosivas, zona roja, localía, descanso, zona horaria, distancia, viento, frío,
+   cambio de QB y nivel del QB. La localía no se asume: su efecto es un coeficiente estimado (~+0.8 pts por equipo).
+3. **Quarterback y lesiones.** El QB titular esperado sale del depth chart de ESPN y de las bajas aplicadas. Su efecto
+   entra por dos variables calibradas en el backtest: el nivel del QB (EPA/dropback encogido) y el cambio respecto a
+   los QBs que jugaron los partidos anteriores del equipo (cubre bajas, regresos y cambios de titular). Para el resto
+   de posiciones sólo cuentan las bajas confirmadas (reporte oficial *Out*, IR/PUP/NFI, suspensión);
+   *Doubtful/Questionable* se muestran como escenario. Su impacto es valor posicional a priori × % de snaps recientes
+   (no calibrado; se indica).
 4. **Monte Carlo.** 10,000 partidos simulados por posesiones (TD/FG/nada) con ruido calibrado con residuos históricos;
    incluye prórroga y empates.
 5. **Validación walk-forward.** Ratings con datos previos a cada semana, coeficientes con temporadas previas.
    Hiperparámetros elegidos en 2019–2021; métricas de prueba en 2022–2026:
 
-| Modelo (prueba, 1,246 partidos) | MAE pts/equipo | MAE margen | Brier | Acierto |
+| Modelo (prueba, 1,275 partidos) | MAE pts/equipo | MAE margen | Brier | Acierto |
 |---|---|---|---|---|
-| NFL Predictor Pro | 7.33 | 9.89 | 0.223 | 63.7% |
-| Promedios simples PF/PC | 7.68 | 10.38 | 0.236 | 60.0% |
-| Promedio de la liga | 7.80 | 10.79 | 0.247 | 54.8% |
+| NFL Predictor Pro | 7.29 | 9.78 | 0.218 | 65.1% |
+| Promedios simples PF/PC | 7.70 | 10.38 | 0.235 | 60.3% |
+| Promedio de la liga | 7.82 | 10.84 | 0.247 | 54.8% |
 
-Limitaciones: el backtest no incluye ajustes por lesiones; usa el clima registrado como proxy del pronóstico;
-los valores posicionales de lesiones no-QB son supuestos a priori; el suplente del QB se estima por experiencia
-(no hay depth chart oficial abierto confiable).
+Sin las variables de QB, el mismo modelo obtiene MAE 7.35 y Brier 0.221 en la prueba. Se evaluaron y descartaron
+(no mejoraron la validación) las pérdidas esperadas del rival, las explosivas separadas en pase/carrera y el
+enfrentamiento de pase profundo.
+
+Limitaciones: el backtest usa el QB titular real de cada partido (en producción el titular esperado viene del
+depth chart y puede fallar); no incluye ajustes por lesiones de otras posiciones; usa el clima registrado como proxy
+del pronóstico; los valores posicionales de lesiones no-QB son supuestos a priori.
 
 ## API
 

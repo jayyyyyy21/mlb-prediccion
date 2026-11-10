@@ -246,7 +246,7 @@ def tactical_matchups(snap: Snapshot, tgd: pd.DataFrame, off_team: str, def_team
             items.append({"metric": "explosive_dep", "title": "Ofensiva dependiente de jugadas explosivas",
                           "advantage": None, "edge": 0, "description": "Mucha explosividad con tasa de éxito baja",
                           "summary": f"{off_team}: {expl:.1%} de jugadas explosivas (liga {lg_expl:.1%}) con success rate {sr:.1%} (liga {lg_sr:.1%})",
-                          "detail": "Producción más volátil: aumenta la incertidumbre de sus puntos."})
+                          "detail": "Perfil descriptivo. En la validación histórica este perfil no se asoció con errores de pronóstico mayores."})
     return items
 
 
