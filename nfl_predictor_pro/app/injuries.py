@@ -21,6 +21,8 @@ Impacto en puntos:
 """
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import numpy as np
 import pandas as pd
 
@@ -38,6 +40,7 @@ POSITION_VALUE = {
 }
 OFFENSE = {"QB", "WR", "TE", "RB", "HB", "FB", "T", "OT", "G", "C", "OL"}
 UNIT_CAP = 4.0          # tope de impacto acumulado por unidad (sin contar QB)
+FINAL_REPORT_HOURS = 36        # el reporte final sale ~2 días antes del partido
 GENERIC_QB = "__reemplazo__"   # QB desconocido: se asume nivel de reemplazo
 SRC_DEPTH = "Depth chart de ESPN"
 SRC_RECENT = "Estimado por dropbacks recientes (sin depth chart)"
@@ -138,22 +141,50 @@ class InjuryData:
         o = self.official
         return bool(not o.empty and ((o["team"] == team) & (o["season"] == season) & (o["week"] == week)).any())
 
-    def statuses(self, team: str, season: int, week: int) -> pd.DataFrame:
+    def report_stage(self, team: str, season: int, week: int, kickoff: datetime | None = None) -> str:
+        """Etapa del reporte oficial de la semana para el equipo.
+
+        "final"    – ya hay designaciones de partido (Out/Doubtful/Questionable), o
+                     faltan menos de 36 h para el partido y el equipo no designó a nadie.
+        "practica" – sólo hay reporte de participación en prácticas (miércoles/jueves).
+        "ninguno"  – aún no se publica nada para esa semana.
+        """
+        o = self.official
+        if o.empty:
+            return "ninguno"
+        rows = o[(o["team"] == team) & (o["season"] == season) & (o["week"] == week)]
+        if rows.empty:
+            return "ninguno"
+        if rows["report_status"].notna().any():
+            return "final"
+        if kickoff is not None and (kickoff - datetime.now(timezone.utc)).total_seconds() <= FINAL_REPORT_HOURS * 3600:
+            return "final"
+        return "practica"
+
+    def statuses(self, team: str, season: int, week: int, kickoff: datetime | None = None) -> pd.DataFrame:
         """Estado de cada jugador con designación (oficial o reportada)."""
         rows = []
-        official = self.official_week_published(team, season, week)
+        stage = self.report_stage(team, season, week, kickoff)
+        official = stage == "final"
         roster = self._roster(team, season, week)
         id_map = roster[["gsis_id", "espn_id", "pfr_id", "full_name", "position"]].copy() if not roster.empty else pd.DataFrame()
-        if official:
+        if stage != "ninguno":
             o = self.official[(self.official["team"] == team) & (self.official["season"] == season) & (self.official["week"] == week)]
             for r in o.itertuples(index=False):
                 st = r.report_status if isinstance(r.report_status, str) else None
-                if not st:
+                if st:
+                    cat = {"Out": "confirmada", "Doubtful": "probable", "Questionable": "cuestionable"}.get(st, "disponible")
+                    rows.append({"gsis_id": r.gsis_id, "name": r.full_name, "position": r.position, "status": st,
+                                 "category": cat, "source": "Reporte oficial NFL",
+                                 "detail": r.report_primary_injury if isinstance(r.report_primary_injury, str) else ""})
                     continue
-                cat = {"Out": "confirmada", "Doubtful": "probable", "Questionable": "cuestionable"}.get(st, "disponible")
-                rows.append({"gsis_id": r.gsis_id, "name": r.full_name, "position": r.position, "status": st,
-                             "category": cat, "source": "Reporte oficial NFL",
-                             "detail": r.report_primary_injury if isinstance(r.report_primary_injury, str) else ""})
+                # Sin designación final todavía: no practicar por lesión es una señal de duda, no una baja.
+                practice = r.practice_status if isinstance(r.practice_status, str) else ""
+                reason = r.practice_primary_injury if isinstance(r.practice_primary_injury, str) else ""
+                if not official and practice.startswith("Did Not Participate") and "not injury related" not in reason.lower():
+                    rows.append({"gsis_id": r.gsis_id, "name": r.full_name, "position": r.position,
+                                 "status": "No practicó", "category": "cuestionable", "practice_only": True,
+                                 "source": "Reporte oficial NFL (prácticas)", "detail": reason})
         # Listas de reserva (transacción oficial) según roster semanal.
         if not roster.empty:
             res = roster[roster["status"].isin(RESERVE_STATUS)]
@@ -172,13 +203,18 @@ class InjuryData:
                     m = id_map[id_map["espn_id"].astype(str).str.replace(r"\.0$", "", regex=True) == str(r.espn_id)]
                     if len(m):
                         gid = m["gsis_id"].iloc[0]
-                if gid and any(x["gsis_id"] == gid for x in rows):
-                    continue
                 st = r.status
+                prior = next((x for x in rows if gid and x["gsis_id"] == gid), None)
+                if prior is not None:
+                    # Un "no practicó" se eleva a baja probable si los medios lo dan por descartado.
+                    if prior.get("practice_only") and st in ("Out", "Doubtful"):
+                        prior.update(status=f"{st} (ESPN) · no practicó", category="probable",
+                                     source="ESPN (no oficial) + reporte de prácticas")
+                    continue
                 if st in ("Injured Reserve", "Suspension"):
                     cat = "confirmada"
                 elif official:
-                    continue  # con reporte oficial publicado, manda el reporte oficial
+                    continue  # con designaciones finales publicadas, manda el reporte oficial
                 elif st in ("Out", "Doubtful"):
                     cat = "probable"
                 elif st == "Questionable":
@@ -202,7 +238,7 @@ def _backup_order(qbs: list[dict]) -> list[dict]:
 
 def evaluate_team(data: InjuryData, team: str, season: int, week: int,
                   forced_out: list[str] | None = None, include_probable: bool = False,
-                  qb_points=None) -> dict:
+                  qb_points=None, kickoff: datetime | None = None) -> dict:
     """Impacto estimado de las bajas de `team`.
 
     Devuelve ajustes de posiciones distintas al QB para la ofensiva propia
@@ -216,7 +252,8 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
     if qb_points is None:  # sin modelo: estimación bruta EPA x dropbacks
         def qb_points(a, b):
             return (qsnap.level(b) - qsnap.level(a)) * qsnap.dropbacks(team)
-    st = data.statuses(team, season, week)
+    st = data.statuses(team, season, week, kickoff)
+    stage = data.report_stage(team, season, week, kickoff)
     shares = data.snap_shares(team, season, week)
     roster = data._roster(team, season, week)
     pfr_by_gsis = dict(zip(roster["gsis_id"], roster["pfr_id"])) if not roster.empty else {}
@@ -316,7 +353,8 @@ def evaluate_team(data: InjuryData, team: str, season: int, week: int,
                   and not p["applied"]), None)
     return {
         "team": team,
-        "official_report": data.official_week_published(team, season, week),
+        "official_report": stage == "final",
+        "report_stage": stage,
         "off_adj": round(off_adj, 2),
         "def_adj": round(def_adj, 2),
         "scenario_off": round(scen_off, 2),

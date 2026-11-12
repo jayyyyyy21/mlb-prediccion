@@ -183,8 +183,9 @@ class Engine:
         out_h = overrides.get("out_home", []) or []
         out_a = overrides.get("out_away", []) or []
         with_inj = bool(use_inj and season == CURRENT_SEASON)
-        inj_h = self.team_injuries(home, season, week, out_h, include_prob) if with_inj else None
-        inj_a = self.team_injuries(away, season, week, out_a, include_prob) if with_inj else None
+        ko = game.get("kickoff") if same_teams else None
+        inj_h = self.team_injuries(home, season, week, out_h, include_prob, ko) if with_inj else None
+        inj_a = self.team_injuries(away, season, week, out_a, include_prob, ko) if with_inj else None
         qsnap = self.qbm.at(season, week)
 
         def qb_ids(team: str, inj: dict | None) -> tuple[str | None, str | None]:
@@ -240,9 +241,14 @@ class Engine:
                            "(se asume clima neutro)."})
         official = bool(inj_h and inj_a and inj_h["official_report"] and inj_a["official_report"])
         unconfirmed_qb = bool((inj_h and inj_h["unconfirmed_qb"]) or (inj_a and inj_a["unconfirmed_qb"]))
-        if use_inj and season == CURRENT_SEASON and not official:
-            alerts.append({"level": "info", "text": "Aún no se publica el reporte oficial de lesiones de la semana para "
-                           "ambos equipos: pronóstico preliminar."})
+        if with_inj and not official:
+            stages = {inj["report_stage"] for inj in (inj_h, inj_a) if inj}
+            if stages == {"ninguno"}:
+                txt = "Aún no se publica el reporte oficial de lesiones de la semana: pronóstico preliminar."
+            else:
+                txt = ("El reporte oficial sólo trae la participación en prácticas; las designaciones finales "
+                       "(Out/Doubtful/Questionable) aún no se publican para ambos equipos: pronóstico preliminar.")
+            alerts.append({"level": "info", "text": txt})
         for inj in (inj_h, inj_a):
             d = inj.get("unconfirmed_qb_detail") if inj else None
             if d:
@@ -329,10 +335,10 @@ class Engine:
         return pts
 
     def team_injuries(self, team: str, season: int, week: int, forced_out: list[str] | None = None,
-                      include_probable: bool = False) -> dict:
+                      include_probable: bool = False, kickoff: datetime | None = None) -> dict:
         qsnap = self.qbm.at(season, week)
         return evaluate_team(self.inj, team, season, week, forced_out, include_probable,
-                             qb_points=self._qb_points(qsnap, team))
+                             qb_points=self._qb_points(qsnap, team), kickoff=kickoff)
 
     def _historical_bucket(self, fav_p: float) -> dict | None:
         for b in self.backtest.get("calibration_test", []):
