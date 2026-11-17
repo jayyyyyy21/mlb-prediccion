@@ -119,9 +119,11 @@ def main():
 
         def dia(d):
             ruta = os.path.join(DIR, "sb", d.strftime("%Y%m%d") + ".json")
-            # los días recientes se vuelven a pedir: el marcador pudo cambiar
+            # se vuelve a pedir un día reciente o uno guardado con partidos sin terminar
             if os.path.exists(ruta) and (hoy - d).days > 2:
-                return json.load(open(ruta))
+                js = json.load(open(ruta))
+                if all(j["terminado"] for j in js):
+                    return js
             sb = curl(f"{API}/scoreboard?dates={d.strftime('%Y%m%d')}")
             if sb is None:
                 return []
