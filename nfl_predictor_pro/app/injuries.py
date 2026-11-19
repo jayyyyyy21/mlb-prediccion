@@ -145,8 +145,10 @@ class InjuryData:
         """Etapa del reporte oficial de la semana para el equipo.
 
         "final"    – ya hay designaciones de partido (Out/Doubtful/Questionable), o
-                     faltan menos de 36 h para el partido y el equipo no designó a nadie.
-        "practica" – sólo hay reporte de participación en prácticas (miércoles/jueves).
+                     faltan menos de 36 h, el equipo no designó a nadie y ESPN tampoco
+                     reporta bajas recientes (si las reporta, es que los datos oficiales
+                     aún no llegan, típico de los partidos del jueves).
+        "practica" – sólo hay reporte de participación en prácticas.
         "ninguno"  – aún no se publica nada para esa semana.
         """
         o = self.official
@@ -158,8 +160,17 @@ class InjuryData:
         if rows["report_status"].notna().any():
             return "final"
         if kickoff is not None and (kickoff - datetime.now(timezone.utc)).total_seconds() <= FINAL_REPORT_HOURS * 3600:
-            return "final"
+            return "practica" if self._recent_espn_designations(team, kickoff) else "final"
         return "practica"
+
+    def _recent_espn_designations(self, team: str, kickoff: datetime) -> bool:
+        """¿ESPN reporta Out/Doubtful/Questionable del equipo actualizados en los 6 días previos al partido?"""
+        e = self.espn
+        if e.empty:
+            return False
+        e = e[(e["team"] == team) & e["status"].isin(["Out", "Doubtful", "Questionable"])]
+        dates = pd.to_datetime(e["date"], utc=True, errors="coerce")
+        return bool((dates >= kickoff - pd.Timedelta(days=6)).any())
 
     def statuses(self, team: str, season: int, week: int, kickoff: datetime | None = None) -> pd.DataFrame:
         """Estado de cada jugador con designación (oficial o reportada)."""
@@ -189,11 +200,14 @@ class InjuryData:
         if not roster.empty:
             res = roster[roster["status"].isin(RESERVE_STATUS)]
             for r in res.itertuples(index=False):
-                if any(x["gsis_id"] == r.gsis_id for x in rows):
+                reserve = {"status": f"Reserva ({r.status_description_abbr or r.status})", "category": "confirmada",
+                           "source": "Roster oficial (lista de reserva)", "practice_only": False}
+                prior = next((x for x in rows if x["gsis_id"] == r.gsis_id), None)
+                if prior is not None:
+                    if prior.get("practice_only"):  # la transacción oficial pesa más que el reporte de prácticas
+                        prior.update(reserve)
                     continue
-                rows.append({"gsis_id": r.gsis_id, "name": r.full_name, "position": r.position,
-                             "status": f"Reserva ({r.status_description_abbr or r.status})", "category": "confirmada",
-                             "source": "Roster oficial (lista de reserva)", "detail": ""})
+                rows.append({"gsis_id": r.gsis_id, "name": r.full_name, "position": r.position, "detail": "", **reserve})
         # ESPN: transacciones (IR/suspensión) y reportes de medios antes del reporte oficial.
         if not self.espn.empty:
             e = self.espn[self.espn["team"] == team]
@@ -207,7 +221,9 @@ class InjuryData:
                 prior = next((x for x in rows if gid and x["gsis_id"] == gid), None)
                 if prior is not None:
                     # Un "no practicó" se eleva a baja probable si los medios lo dan por descartado.
-                    if prior.get("practice_only") and st in ("Out", "Doubtful"):
+                    if prior.get("practice_only") and st in ("Injured Reserve", "Suspension"):
+                        prior.update(status=st, category="confirmada", source="ESPN (transacción)", practice_only=False)
+                    elif prior.get("practice_only") and st in ("Out", "Doubtful"):
                         prior.update(status=f"{st} (ESPN) · no practicó", category="probable",
                                      source="ESPN (no oficial) + reporte de prácticas")
                     continue

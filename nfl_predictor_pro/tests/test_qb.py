@@ -38,3 +38,17 @@ def test_uses_only_past_games():
 def test_unknown_qb_gets_replacement_level():
     snap = QBModel(_games()).at(2025, 9)
     assert snap.level("novato") == snap.replacement
+
+
+def test_report_stage_waits_for_designations_when_espn_reports_absences():
+    from datetime import datetime, timedelta, timezone
+    from app.injuries import InjuryData
+    d = InjuryData.__new__(InjuryData)
+    ko = datetime.now(timezone.utc) + timedelta(hours=12)
+    d.official = pd.DataFrame({"team": ["AAA"], "season": [2026], "week": [11], "report_status": [None]})
+    d.espn = pd.DataFrame({"team": ["AAA"], "status": ["Out"], "date": [(ko - timedelta(days=1)).isoformat()]})
+    assert d.report_stage("AAA", 2026, 11, ko) == "practica"   # faltan designaciones oficiales
+    d.espn = pd.DataFrame({"team": ["AAA"], "status": ["Active"], "date": [(ko - timedelta(days=1)).isoformat()]})
+    assert d.report_stage("AAA", 2026, 11, ko) == "final"      # nadie designado: reporte final
+    d.official["report_status"] = ["Out"]
+    assert d.report_stage("AAA", 2026, 11, ko) == "final"
