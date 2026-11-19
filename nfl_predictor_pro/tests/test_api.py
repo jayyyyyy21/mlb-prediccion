@@ -44,3 +44,14 @@ def test_simulator_qb_absence_lowers_points(client):
 def test_export_csv(client):
     r = client.get("/api/export?fmt=csv")
     assert r.status_code == 200 and "prob_local" in r.text
+
+
+def test_upset_flag_matches_probability(client):
+    for g in client.get("/api/predictions").json()["games"]:
+        u = g["upset_risk"]
+        fav = max(g["projection"]["p_home"] + g["projection"]["p_tie"] / 2,
+                  g["projection"]["p_away"] + g["projection"]["p_tie"] / 2)
+        if fav < u["threshold"] - 1e-6:
+            assert u["flag"] and u["reasons"]
+        if not u["reasons"]:
+            assert not u["flag"]

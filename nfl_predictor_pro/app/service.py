@@ -21,6 +21,10 @@ from .simulate import simulate
 from .sources import weather
 from .stadiums import STADIUMS, home_stadium
 
+# Asterisco de "puede perder": por debajo de este umbral el favorito perdió el 43% de
+# las veces en las temporadas de prueba del backtest (27% por encima).
+UPSET_THRESHOLD = 0.60
+
 GAME_TYPE_ES = {"REG": "Temporada regular", "WC": "Comodín", "DIV": "Divisional", "CON": "Campeonato de conferencia",
                 "SB": "Super Bowl"}
 
@@ -48,6 +52,7 @@ class Engine:
             md = db.kv_get("production_model")
             self.model = PointsModel.from_dict(md) if md else None
             self.backtest = db.kv_get("backtest") or {}
+            self.upset_rates = self._upset_rates()
             self.qbm = QBModel(db.read_table("qb_games"), self.params["half_life"])
             self.inj = InjuryData(self.qbm)
             self.starters = starters_from_schedule(self.schedule[self.schedule["home_score"].notna()])
@@ -272,6 +277,16 @@ class Engine:
         level = max(0, level - (1 if downgrades else 0))
         confidence = ["Bajo", "Moderado", "Alto"][level]
         hist = self._historical_bucket(fav_p)
+        fav_team = home if p_h >= 0.5 else away
+        upset_reasons = []
+        if fav_p < UPSET_THRESHOLD:
+            upset_reasons.append(f"El favorito ({fav_team}) tiene menos de {UPSET_THRESHOLD:.0%} de probabilidad")
+        for inj in (inj_h, inj_a):
+            d = inj.get("unconfirmed_qb_detail") if inj else None
+            if d:
+                upset_reasons.append(f"QB titular de {inj['team']} en duda ({d['name']})")
+        upset = {"flag": bool(upset_reasons), "favorite": fav_team, "p_favorite": round(fav_p, 4),
+                 "reasons": upset_reasons, "threshold": UPSET_THRESHOLD, **self.upset_rates}
 
         if game["played"] and not overrides:
             status = "Finalizado (pronóstico retrospectivo)"
@@ -295,6 +310,7 @@ class Engine:
             "confidence": confidence,
             "confidence_reasons": downgrades,
             "historical_bucket": hist,
+            "upset_risk": upset,
             "projection": {
                 "home_points": r1(mu_h), "away_points": r1(mu_a),
                 "home_points_base": r1(base_h), "away_points_base": r1(base_a),
@@ -339,6 +355,22 @@ class Engine:
         qsnap = self.qbm.at(season, week)
         return evaluate_team(self.inj, team, season, week, forced_out, include_probable,
                              qb_points=self._qb_points(qsnap, team), kickoff=kickoff)
+
+    def _upset_rates(self) -> dict:
+        """Frecuencia histórica (temporadas de prueba) con la que pierde el favorito, bajo y sobre el umbral."""
+        bt = db.read_table("backtest_games")
+        test = set(self.backtest.get("test_seasons", []))
+        if bt.empty or not test:
+            return {"hist_loss_below": None, "hist_loss_above": None, "hist_games": 0}
+        bt = bt[bt["season"].isin(test)]
+        p = bt["p_a"] + 0.5 * bt["p_tie"]
+        fav = np.maximum(p, 1 - p)
+        res = np.where(bt["pts_a"] > bt["pts_b"], 1.0, np.where(bt["pts_a"] < bt["pts_b"], 0.0, 0.5))
+        lost = 1 - np.where(p >= 0.5, res, 1 - res)
+        below = fav < UPSET_THRESHOLD
+        return {"hist_loss_below": float(lost[below].mean()) if below.any() else None,
+                "hist_loss_above": float(lost[~below].mean()) if (~below).any() else None,
+                "hist_games": int(len(bt))}
 
     def _historical_bucket(self, fav_p: float) -> dict | None:
         for b in self.backtest.get("calibration_test", []):

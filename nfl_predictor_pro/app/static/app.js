@@ -153,7 +153,7 @@ async function loadWeek() {
       const mae = played.reduce((s, g) => s + Math.abs(g.projection.home_points - g.game.home_score) + Math.abs(g.projection.away_points - g.game.away_score), 0) / (2 * played.length);
       summary += ` Partidos jugados: ${played.length} · favorito acertado en ${hits} · error absoluto medio ${mae.toFixed(1)} pts (pronóstico retrospectivo con datos previos a la semana).`;
     }
-    $("#week-summary").textContent = summary;
+    $("#week-summary").innerHTML = `${esc(summary)}<div class="small" style="margin-top:4px">${upsetLegend(games)}</div>`;
     $("#games").innerHTML = games.map(gameCard).join("") || `<div class="muted">Sin partidos.</div>`;
     document.querySelectorAll(".game").forEach((el) => el.addEventListener("click", () => openGame(el.dataset.id)));
   } catch (e) {
@@ -164,16 +164,27 @@ async function loadWeek() {
 function gameCard(r) {
   const g = r.game, p = r.projection;
   const real = g.played ? `<span class="real">Final: ${esc(g.away)} ${g.away_score} - ${g.home_score} ${esc(g.home)}</span>` : "";
+  const u = r.upset_risk || {};
+  const star = (t) => (u.flag && u.favorite === t ? `<span class="upset-star" title="${esc(u.reasons.join(" · "))}">*</span>` : "");
   const row = (t, pts, pr) => `<div class="team-row"><div class="team">${badge(t)}<span class="team-name">${esc(teamName(t))}</span></div>
-      <div class="pts">${fmt(pts)}</div><div class="pct">${pct(pr)}</div></div>`;
+      <div class="pts">${fmt(pts)}</div><div class="pct">${pct(pr)}${star(t)}</div></div>`;
   return `<div class="card game" data-id="${esc(g.game_id)}" role="button" tabindex="0">
     <div class="game-head"><span>${esc(fmtDate(g))}${g.neutral ? " · sede neutral" : ""}</span><span>${esc(g.stadium || "")}</span></div>
     ${row(g.away, p.away_points, p.p_away)}
     ${row(g.home, p.home_points, p.p_home)}
     <div class="probbar"><div style="width:${p.p_away * 100}%;background:${esc(teamColor(g.away))}"></div><div style="width:${p.p_tie * 100}%;background:#64748b"></div><div style="width:${p.p_home * 100}%;background:${esc(teamColor(g.home))}"></div></div>
-    <div class="game-foot">${confPill(r.confidence)} ${statusPill(r.status)}
+    <div class="game-foot">${confPill(r.confidence)} ${statusPill(r.status)}${u.flag ? ` <span class="pill upset">* Puede perder ${esc(u.favorite)}</span>` : ""}
       <span>Marcador: ${esc(g.away)} ${p.score_away}-${p.score_home} ${esc(g.home)} · Total ${fmt(p.total)}</span>${real}</div>
   </div>`;
+}
+
+function upsetLegend(games) {
+  const u = (games.find((g) => g.upset_risk) || {}).upset_risk;
+  if (!u) return "";
+  const n = games.filter((g) => g.upset_risk && g.upset_risk.flag).length;
+  const hist = u.hist_loss_below != null
+    ? ` En la validación histórica, cuando el favorito tenía menos de ${pct(u.threshold)} perdió el ${pct(u.hist_loss_below)} de las veces (contra ${pct(u.hist_loss_above)} en el resto).` : "";
+  return `<span class="upset-star">*</span> Puede perder el favorito (${n} de ${games.length} partidos): su probabilidad es menor a ${pct(u.threshold)} o el QB titular de algún equipo está en duda.${hist}`;
 }
 
 // ---------------------------------------------------------------- detalle
@@ -292,6 +303,7 @@ function renderPrediction(el, r, key) {
       <div class="kpi"><div class="l">Simulaciones</div><div class="v">${sim.n_sims.toLocaleString("es")}</div></div>
     </div>
     ${r.historical_bucket ? `<div class="small muted" style="margin-top:10px">${esc(r.historical_bucket.text)}</div>` : ""}
+    ${r.upset_risk && r.upset_risk.flag ? `<div class="alert warn" style="margin-top:10px"><b><span class="upset-star">*</span> Puede perder ${esc(r.upset_risk.favorite)}.</b> ${esc(r.upset_risk.reasons.join(". "))}.${r.upset_risk.hist_loss_below != null ? ` Históricamente, favoritos con menos de ${pct(r.upset_risk.threshold)} perdieron el ${pct(r.upset_risk.hist_loss_below)} de las veces.` : ""}</div>` : ""}
   </div>
   <div class="alerts section">${alertsHtml(r.alerts)}</div>
 

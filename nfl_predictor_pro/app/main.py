@@ -203,14 +203,15 @@ def export(season: int = CURRENT_SEASON, week: int | None = None, fmt: str = Que
     w = csv.writer(buf)
     w.writerow(["temporada", "semana", "fecha", "local", "visitante", "pts_local", "pts_visitante", "marcador_estimado",
                 "prob_local", "prob_visitante", "prob_empate", "diferencia_local", "total", "confianza", "estado",
-                "resultado_real", "datos_actualizados"])
+                "puede_perder_favorito", "motivo_riesgo", "resultado_real", "datos_actualizados"])
     upd = db.kv_get("last_update")
     for g in games:
         gm, p = g["game"], g["projection"]
         real = f"{gm['home_score']}-{gm['away_score']}" if gm.get("played") else ""
         w.writerow([season, week, gm["gameday"], gm["home"], gm["away"], p["home_points"], p["away_points"],
                     f"{p['score_home']}-{p['score_away']}", round(p["p_home"], 4), round(p["p_away"], 4),
-                    round(p["p_tie"], 4), p["spread_home"], p["total"], g["confidence"], g["status"], real, upd])
+                    round(p["p_tie"], 4), p["spread_home"], p["total"], g["confidence"], g["status"],
+                    "*" if g["upset_risk"]["flag"] else "", "; ".join(g["upset_risk"]["reasons"]), real, upd])
     return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
                     headers={"Content-Disposition": f"attachment; filename=nfl_pronosticos_{season}_s{week}.csv"})
 

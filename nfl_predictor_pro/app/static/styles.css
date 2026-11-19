@@ -142,3 +142,5 @@ footer { max-width: 1280px; margin: 20px auto; padding: 0 16px 30px; color: var(
   body { background: #fff; color: #000; }
   .card { border-color: #ccc; background: #fff; }
 }
+.upset-star { color: var(--warn); font-weight: 900; margin-left: 2px; }
+.pill.upset { color: var(--warn); border-color: rgba(251, 191, 36, .5); }

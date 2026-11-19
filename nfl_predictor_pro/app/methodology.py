@@ -73,6 +73,7 @@ METHODOLOGY = [
         "body": [
             "Confianza base según la probabilidad del favorito: Alto ≥ 72%, Moderado ≥ 60%, Bajo < 60%. Baja un nivel si hay muestra pequeña (< 4 partidos en la temporada), QB titular en duda, clima desconocido o estadísticas faltantes.",
             "Se muestra junto a la frecuencia histórica de acierto de favoritos con probabilidad similar (fuera de muestra).",
+            "Asterisco (*) 'puede perder el favorito': se marca cuando la probabilidad del favorito es menor a 60% o el QB titular de algún equipo está en duda. En las temporadas de prueba, los favoritos por debajo de 60% perdieron el 43% de las veces, contra 27% por encima. No es una predicción de sorpresa: indica que el resultado está abierto.",
             "Estado 'Confirmado': reporte oficial de lesiones publicado para ambos equipos, QB titulares sin duda y clima conocido. En otro caso, 'Preliminar'.",
         ],
     },
