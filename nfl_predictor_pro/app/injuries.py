@@ -41,6 +41,8 @@ POSITION_VALUE = {
 OFFENSE = {"QB", "WR", "TE", "RB", "HB", "FB", "T", "OT", "G", "C", "OL"}
 UNIT_CAP = 4.0          # tope de impacto acumulado por unidad (sin contar QB)
 FINAL_REPORT_HOURS = 36        # el reporte final sale ~2 días antes del partido
+LATE_OUT_HOURS = 48            # descartes anunciados por el equipo después del reporte final
+LATE_ACTIVE_HOURS = 12         # lista de activos/inactivos del día del partido
 GENERIC_QB = "__reemplazo__"   # QB desconocido: se asume nivel de reemplazo
 SRC_DEPTH = "Depth chart de ESPN"
 SRC_RECENT = "Estimado por dropbacks recientes (sin depth chart)"
@@ -226,6 +228,8 @@ class InjuryData:
                     elif prior.get("practice_only") and st in ("Out", "Doubtful"):
                         prior.update(status=f"{st} (ESPN) · no practicó", category="probable",
                                      source="ESPN (no oficial) + reporte de prácticas")
+                    elif prior["source"] == "Reporte oficial NFL" and prior["category"] in ("probable", "cuestionable"):
+                        _apply_late_update(prior, st, r.date, kickoff)
                     continue
                 if st in ("Injured Reserve", "Suspension"):
                     cat = "confirmada"
@@ -241,6 +245,29 @@ class InjuryData:
                              "category": cat, "source": "ESPN (no oficial)" if cat != "confirmada" else "ESPN (transacción)",
                              "detail": r.injury_type if isinstance(r.injury_type, str) else ""})
         return pd.DataFrame(rows)
+
+
+def _apply_late_update(row: dict, espn_status: str, espn_date, kickoff: datetime | None) -> None:
+    """Actualizaciones posteriores al reporte final para jugadores Questionable/Doubtful.
+
+    El reporte final sale el viernes; después el equipo descarta jugadores
+    (sábado) y publica la lista de inactivos (90 min antes del partido). ESPN
+    refleja esos anuncios: "Out" en las 48 h previas al partido es un descarte
+    del equipo y cuenta como baja confirmada; "Active" en las 12 h previas es la
+    lista oficial de activos y quita la duda.
+    """
+    if kickoff is None:
+        return
+    when = pd.to_datetime(espn_date, utc=True, errors="coerce")
+    if pd.isna(when) or when > kickoff:
+        return
+    hours_before = (kickoff - when).total_seconds() / 3600
+    if espn_status == "Out" and hours_before <= LATE_OUT_HOURS:
+        row.update(status=f"Out (descartado después del reporte; antes {row['status']})", category="confirmada",
+                   source="Reporte oficial NFL + anuncio posterior del equipo (vía ESPN)")
+    elif espn_status == "Active" and hours_before <= LATE_ACTIVE_HOURS:
+        row.update(status=f"Activo (lista de inactivos; antes {row['status']})", category="disponible",
+                   source="Reporte oficial NFL + lista de activos del partido (vía ESPN)")
 
 
 def _backup_order(qbs: list[dict]) -> list[dict]:

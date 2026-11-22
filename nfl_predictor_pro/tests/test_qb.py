@@ -52,3 +52,19 @@ def test_report_stage_waits_for_designations_when_espn_reports_absences():
     assert d.report_stage("AAA", 2026, 11, ko) == "final"      # nadie designado: reporte final
     d.official["report_status"] = ["Out"]
     assert d.report_stage("AAA", 2026, 11, ko) == "final"
+
+
+def test_late_updates_after_final_report():
+    from datetime import datetime, timedelta, timezone
+    from app.injuries import _apply_late_update
+    ko = datetime(2026, 11, 22, 18, 0, tzinfo=timezone.utc)
+    row = {"status": "Questionable", "category": "cuestionable", "source": "Reporte oficial NFL"}
+    _apply_late_update(row, "Out", (ko - timedelta(hours=20)).isoformat(), ko)
+    assert row["category"] == "confirmada"
+    row = {"status": "Questionable", "category": "cuestionable", "source": "Reporte oficial NFL"}
+    _apply_late_update(row, "Active", (ko - timedelta(hours=1)).isoformat(), ko)
+    assert row["category"] == "disponible"
+    row = {"status": "Questionable", "category": "cuestionable", "source": "Reporte oficial NFL"}
+    _apply_late_update(row, "Out", (ko - timedelta(days=5)).isoformat(), ko)  # dato viejo: no cambia
+    _apply_late_update(row, "Active", (ko - timedelta(hours=30)).isoformat(), ko)  # no es lista del partido
+    assert row["category"] == "cuestionable"
