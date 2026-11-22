@@ -9,7 +9,7 @@ METHODOLOGY = [
             "Blitz y número de pass rushers: charting abierto de FTN Data publicado por nflverse (desde 2022, licencia CC-BY-SA 4.0).",
             "Reporte oficial de lesiones de la NFL, snaps por jugador y rosters semanales: nflverse.",
             "Estado de lesiones actualizado entre reportes oficiales y depth chart de quarterbacks: endpoints públicos de ESPN (se etiquetan como no oficiales).",
-            "Pronóstico del clima: Open-Meteo (sin API key), sólo para partidos al aire libre dentro de ~15 días.",
+            "Pronóstico del clima para partidos al aire libre: Open-Meteo, con respaldo del Servicio Meteorológico de EE.UU. (weather.gov) y de MET Norway (api.met.no, CC BY 4.0) para sedes fuera de EE.UU. Ninguno requiere API key.",
             "Las columnas de mercado (spread, total, moneyline) se eliminan al descargar el calendario: el modelo NUNCA usa cuotas.",
             "Cada fuente guarda fecha y hora de su última actualización (pestaña Metodología y barra superior).",
         ],

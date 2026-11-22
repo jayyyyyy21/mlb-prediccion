@@ -45,7 +45,7 @@ Ninguna fuente requiere API key ni credenciales.
 | [nflverse-data](https://github.com/nflverse/nflverse-data) | Calendario, resultados, play-by-play (EPA, success rate), reporte oficial de lesiones, snaps, rosters | CC-BY 4.0 (atribuir a nflverse) |
 | FTN Data vía nflverse | Blitz y pass rushers (desde 2022) | CC-BY-SA 4.0 |
 | ESPN (endpoints públicos) | Estado de lesiones entre reportes oficiales y depth chart de QBs; marcados como **no oficiales** | Endpoint no documentado; uso personal, puede cambiar |
-| [Open-Meteo](https://open-meteo.com) y [weather.gov](https://www.weather.gov/documentation/services-web-api) | Pronóstico del clima en estadios abiertos (weather.gov como respaldo, sólo EE.UU.) | Gratis; Open-Meteo para uso no comercial |
+| [Open-Meteo](https://open-meteo.com), [weather.gov](https://www.weather.gov/documentation/services-web-api) y [MET Norway](https://api.met.no) | Pronóstico del clima en estadios abiertos (weather.gov y met.no como respaldo; met.no cubre sedes internacionales) | Gratis; Open-Meteo para uso no comercial; met.no CC BY 4.0 y pide identificar la app (`NFLPP_CONTACT` opcional) |
 
 NFL.com y Pro Football Reference no ofrecen API abierta; sus términos prohíben el scraping, así que no se
 consultan directamente (nflverse publica datos equivalentes con licencia abierta).
